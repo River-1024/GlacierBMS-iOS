@@ -1,4 +1,4 @@
-# GlacierBMS iOS（冰川智舱）
+# ANTuRide iOS（安途）
 
 原生 SwiftUI iOS 首版，面向个人签名安装。项目目标是通过 CoreBluetooth 连接 ANT BMS，提供驾驶仪表盘、GPS 速度、实时电池状态和后续行程/续航能力。
 

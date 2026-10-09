@@ -48,7 +48,22 @@ struct DeviceView: View {
                 sessionRow
             }
 
-            Section("附近的 ANT BMS") {
+            Section {
+                Toggle(isOn: keywordFilterBinding) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("按设备名过滤")
+                        Text("仅显示 ANT BMS（ant）与 APT 控制器（apt）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } footer: {
+                Text(bms.isKeywordFilterEnabled
+                     ? "关闭后将列出附近全部蓝牙设备，用于排查名称不含 ant / apt 的设备。"
+                     : "当前列出附近全部蓝牙设备；打开后仅保留名称含 ant / apt 的设备，以及广播 FFE0 服务的设备。")
+            }
+
+            Section("附近设备") {
                 if bms.discoveredDevices.isEmpty {
                     Text(bms.state == .scanning ? "正在扫描…" : "暂未发现设备，点击右上角扫描")
                         .foregroundStyle(.secondary)
@@ -91,6 +106,13 @@ struct DeviceView: View {
                 }
             }
         }
+    }
+
+    private var keywordFilterBinding: Binding<Bool> {
+        Binding(
+            get: { bms.isKeywordFilterEnabled },
+            set: { bms.setKeywordFilterEnabled($0) }
+        )
     }
 
     private func deviceRow(_ device: BmsBluetoothService.DiscoveredDevice) -> some View {

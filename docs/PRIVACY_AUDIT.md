@@ -1,4 +1,4 @@
-# GlacierBMS iOS 隐私与凭据审计记录
+# ANTuRide iOS 隐私与凭据审计记录
 
 > 审计时间：2026-10-09 23:10（北京时间）
 > 审计对象：`D:\daima\bms\GPS_ANT_BMS\iOS`（独立仓库 `GlacierBMS-iOS`）
@@ -13,7 +13,7 @@
 
 ## 2. 审计范围
 
-已跟踪文件共 21 个，全部为源码、配置或文档：
+已跟踪文件共 28 个，另有 3 个 App 图标资源文件随改名一并新增，全部为源码、配置、资源或文档：
 
 | 类别 | 路径 |
 |---|---|
@@ -22,13 +22,14 @@
 | 隐私/安全文档 | `PRIVACY.md`、`SECURITY.md` |
 | 工程定义 | `Package.swift`、`project.yml` |
 | 隐私清单 | `Resources/PrivacyInfo.xcprivacy` |
-| App 壳 | `Sources/App/GlacierBMSApp.swift`、`Sources/App/RootView.swift` |
+| App 壳 | `Sources/App/ANTuRideApp.swift`、`Sources/App/RootView.swift` |
+| App 图标 | `Resources/Assets.xcassets/AppIcon.appiconset/`、`Resources/Assets.xcassets/Contents.json` |
 | 主题 | `Sources/DesignSystem/AppTheme.swift` |
 | 领域模型 | `Sources/Domain/Models/BmsSnapshot.swift` |
 | 协议 | `Sources/Domain/Protocol/AntProtocol.swift`、`BmsFrameAssembler.swift` |
 | 服务 | `Sources/Services/BmsBluetoothService.swift` |
 | 界面 | `Sources/Features/Dashboard/DashboardView.swift` |
-| 测试 | `Tests/UnitTests/*.swift`、`Tests/UITests/GlacierBMSTests.swift` |
+| 测试 | `Tests/UnitTests/*.swift`、`Tests/UITests/ANTuRideUITests.swift` |
 | 规划文档 | `docs/MIGRATION_PLAN.md` |
 
 未跟踪但存在于工作树的构建产物已被 `.gitignore` 排除（`.build/`、`DerivedData/`、`xcuserdata/`、`*.xcuserstate`、`.DS_Store`）。
@@ -53,7 +54,9 @@
 
 ### 3.4 个人路径与媒体文件扫描
 
-已跟踪文件中不含 Windows/macOS 绝对个人路径，不含 `.png`、`.jpg`、`.mp4`、`.wav` 等媒体文件。
+已跟踪文件中不含 Windows/macOS 绝对个人路径，不含 `.jpg`、`.mp4`、`.wav` 等个人媒体文件。
+
+唯一的图片文件是 `Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`，为 App 图标工程资源（由 AI 生成后经本机脚本移除水印、统一为 1024×1024 无透明通道 PNG），不含任何个人内容或设备信息。
 
 ### 3.5 隐私清单核对
 
@@ -102,3 +105,28 @@ grep -rniE "teamid|team_id|BEGIN (RSA|EC|PRIVATE)|mobileprovision|password|secre
 # 已跟踪文件清单
 git ls-files
 ```
+
+## 7. 2026-10-10 项目改名记录
+
+项目由 `GlacierBMS`（显示名「冰川智舱」）统一更名为 `ANTuRide`（显示名「安途」）。
+
+| 影响面 | 变更 |
+|---|---|
+| Xcode 工程与 target | `ANTuRide`、`ANTuRideDomain`、`ANTuRideTests`、`ANTuRideUITests` |
+| Bundle ID | `com.zjsf.anturide`、`.domain`、`.tests`、`.uitests` |
+| Swift 模块 | `GlacierBMSDomain` → `ANTuRideDomain`（含全部 `import`） |
+| Swift 文件 | `Sources/App/ANTuRideApp.swift`、`Tests/UITests/ANTuRideUITests.swift` |
+| CI | 工作流名称、`ANTuRide.xcodeproj`、scheme、产物 `ANTuRide-unsigned-ipa` |
+| BLE 过滤关键字 | 默认值改为 `["ant", "apt"]`（`ant` = ANT BMS 电池保护板，`apt` = APT 电机控制器） |
+| 新增过滤开关 | `BmsBluetoothService.isKeywordFilterEnabled`（默认开启，`UserDefaults` 持久化）；关闭后列出附近全部设备。功能项，非纯文案 |
+| 新增资源 | `Resources/Assets.xcassets`，`ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` |
+
+保留项：GitHub 远程仓库地址 `https://github.com/River-1024/GlacierBMS-iOS` 未改写。该地址属外部资源标识，GitHub 在仓库改名后会对旧地址自动重定向，保留原值比抢先改写更稳妥；如需同步，应在 GitHub 完成仓库改名后再更新文档。
+
+改名复核命令：
+
+```bash
+grep -rn -E "Glacier|冰川|glacier" . --exclude-dir=.git --exclude-dir=.workbuddy
+```
+
+结果：仅剩 5 处上述仓库地址引用，无其他残留。

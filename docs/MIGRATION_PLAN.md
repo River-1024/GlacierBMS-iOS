@@ -1,4 +1,4 @@
-# 冰川智舱 原生 iOS 首版总体规划与施工进度
+# 安途（ANTuRide）原生 iOS 首版总体规划与施工进度
 
 > 更新时间：2026-10-10 00:20（北京时间）  
 > 状态：阶段 1 代码完成；全屏适配与液态玻璃真机验证通过，BMS 真机链路待验收  
@@ -72,7 +72,7 @@
 
 目标：在真实 iPhone 上完成扫描、连接、Notify、周期查询、断开和恢复。
 
-> 2026-10-09 施工记录：扫描/选择/周期查询/新鲜度/重连的代码与 UI 绑定已完成；扫描策略为全量扫描后按 FFE0 广播服务或名称关键字（ant/bms/glacier）过滤，兼容不广播 FFE0 的固件；GPS 速度仍属阶段 2。  
+> 2026-10-09 施工记录：扫描/选择/周期查询/新鲜度/重连的代码与 UI 绑定已完成；扫描策略为全量扫描后按 FFE0 广播服务或名称关键字（ant/bms/antu）过滤，兼容不广播 FFE0 的固件；GPS 速度仍属阶段 2。  
 > 2026-10-10 真机确认：App 全屏铺满、界面显示正常（含液态玻璃渲染）；剩余待验收项仅 BMS 真机链路。
 
 交付：
@@ -152,7 +152,7 @@
 - [x] Windows 静态检查已完成：关键文件存在、关键协议符号存在、Swift 大括号平衡通过。
 - [x] 已新建独立私有仓库 `https://github.com/River-1024/GlacierBMS-iOS` 并推送全部提交；本项目独立创建，不引用、不合并旧 iOS 项目。
 - [x] 已在 GitHub-hosted macOS runner 上通过 CI：SwiftPM 测试、iOS 模拟器测试、无签名设备构建。
-- [x] 已产出无签名 IPA 产物 `GlacierBMS-unsigned-ipa`。
+- [x] 已产出无签名 IPA 产物 `ANTuRide-unsigned-ipa`。
 - [x] 已完成隐私与凭据审计，记录于 `docs/PRIVACY_AUDIT.md`。
 - [x] 已记录 GitHub 构建结果，记录于 `docs/CI_BUILD_RESULTS.md`。
 - [x] 2026-10-09 真机反馈修复：App 仅屏幕中间显示的根因是 `project.yml` 缺少 `UILaunchScreen` 声明，iOS 按旧分辨率信箱化渲染；已加入显式 Info.plist（启动屏、竖/横屏方向、蓝牙与定位用途说明），并将设备家族收敛为 iPhone。
@@ -160,8 +160,11 @@
 - [x] 2026-10-09 阶段 1 代码施工：设备扫描列表（RSSI 排序 + FFE0 服务/名称关键字过滤）、用户选择连接、Notify 后 1 秒周期查询、快照历史 120 条、意外断开自动重连一次、`didFailToConnect` 与发现服务失败状态回退。
 - [x] 2026-10-09 阶段 1 UI 绑定：设备页、详情页（单体/温度/MOS/运行时长）、仪表盘实时绑定（电压/电流/功率/SOC/Ah/SOH/状态），Canvas 电流曲线，数据新鲜度徽标（noData/fresh/stale）。
 - [x] 2026-10-09 新增 `BmsFreshnessEvaluator` 领域评估器与单元测试；扩展 `0x11` 解析测试锁定电流/SOC/功率偏移。
-- [x] 2026-10-10 阶段 1 CI 验证通过：Run `37955477377`（`f1d125e`）在 Xcode 26.3 / iOS 26.2 SDK 上完成 SwiftPM 测试、模拟器测试与无签名设备构建；经两轮修复（`0x11` 功率偏移 @106、视图补 `import GlacierBMSDomain`）。
+- [x] 2026-10-10 阶段 1 CI 验证通过：Run `37955477377`（`f1d125e`）在 Xcode 26.3 / iOS 26.2 SDK 上完成 SwiftPM 测试、模拟器测试与无签名设备构建；经两轮修复（`0x11` 功率偏移 @106、视图补 `import ANTuRideDomain`）。
 - [x] 2026-10-10 真机确认：全屏铺满显示正常（`UILaunchScreen` 修复生效），液态玻璃界面正常渲染。
+- [x] 2026-10-10 项目更名为 `ANTuRide`（显示名「安途」）：Xcode 工程与 4 个 target、Bundle ID、Swift 模块名（`ANTuRideDomain`）、CI 工作流与产物名及全部文档同步替换。详见 `docs/PRIVACY_AUDIT.md` 第 7 节。
+- [x] 2026-10-10 扫描过滤改为默认 `["ant", "apt"]`（ant = ANT BMS 电池保护板，apt = APT 电机控制器），并新增可持久化开关 `isKeywordFilterEnabled`（默认开启）；设备页提供 Toggle，关闭后列出附近全部蓝牙设备，切换后自动重启扫描刷新结果。
+- [x] 2026-10-10 新增 App 图标：`Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`（1024×1024 无透明通道 PNG），`project.yml` 设置 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 并将资产目录加入 app target 资源。
 - [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
@@ -208,8 +211,8 @@
 ```bash
 xcodegen generate
 swift test
-xcodebuild -project GlacierBMS.xcodeproj \
-  -scheme GlacierBMS \
+xcodebuild -project ANTuRide.xcodeproj \
+  -scheme ANTuRide \
   -destination 'platform=iOS Simulator,name=iPhone 15' \
   CODE_SIGNING_ALLOWED=NO test
 ```
@@ -226,10 +229,10 @@ xcodebuild -project GlacierBMS.xcodeproj \
 
 - 新建 GitHub 私有仓库：`https://github.com/River-1024/GlacierBMS-iOS`。
 - 本项目完全独立创建，不导入、不合并、不引用旧 iOS 仓库代码。
-- 项目名称：`GlacierBMS`；App 显示名称：`冰川智舱`；Bundle ID：`com.zjsf.glacierbms`。
+- 项目名称：`ANTuRide`；App 显示名称：`安途`；Bundle ID：`com.zjsf.anturide`。
 - 隐私审计结果：未发现 Token、密钥、证书、描述文件、真实 BLE 地址、GPS 轨迹、本机路径或媒体文件；当前首版不声明摄像头、麦克风、照片或音频权限。完整记录见 `docs/PRIVACY_AUDIT.md`。
 - GitHub Actions 工作流：`.github/workflows/build.yml`。
 - GitHub-hosted macOS 编译验证：当前 `main`（`f1d125e`）对应的 Run `37955477377` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建，运行环境为 Xcode 26.3 / iOS 26.2 SDK（液态玻璃 API 首次编译通过）；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
-- CI 产物名称：`GlacierBMS-unsigned-ipa`，保留 7 天；从最新成功运行页面的 Artifacts 下载。
+- CI 产物名称：`ANTuRide-unsigned-ipa`，保留 7 天；从最新成功运行页面的 Artifacts 下载。
 - 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
 - 工作树状态：`main` 与 `origin/main` 一致，工作树干净，无凭据与旧项目引用；`.workbuddy/` 已加入 `.gitignore`，不进入仓库。

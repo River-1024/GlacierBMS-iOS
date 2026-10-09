@@ -1,4 +1,4 @@
-name: GlacierBMS
+name: ANTuRide
 options:
   bundleIdPrefix: com.zjsf
   deploymentTarget:
@@ -11,7 +11,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 targets:
-  GlacierBMSDomain:
+  ANTuRideDomain:
     type: framework
     platform: iOS
     deploymentTarget: "16.0"
@@ -19,10 +19,10 @@ targets:
       - path: Sources/Domain
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.domain
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide.domain
         GENERATE_INFOPLIST_FILE: YES
 
-  GlacierBMS:
+  ANTuRide:
     type: application
     platform: iOS
     deploymentTarget: "16.0"
@@ -33,12 +33,13 @@ targets:
       - path: Sources/DesignSystem
     resources:
       - path: Resources/PrivacyInfo.xcprivacy
+      - path: Resources/Assets.xcassets
     dependencies:
-      - target: GlacierBMSDomain
+      - target: ANTuRideDomain
     info:
       path: Support/Info.plist
       properties:
-        CFBundleDisplayName: 冰川智舱
+        CFBundleDisplayName: 安途
         # 关键修复：没有 UILaunchScreen 声明时 iOS 会把 App 按旧分辨率
         # 信箱化渲染（表现为屏幕中间一小块）。空字典即启用系统生成的
         # 启动屏，使 App 全屏铺满真机。
@@ -51,55 +52,56 @@ targets:
         NSLocationWhenInUseUsageDescription: 记录速度、里程和行程能耗
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
-  GlacierBMSTests:
+  ANTuRideTests:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "16.0"
     sources:
       - path: Tests/UnitTests
     dependencies:
-      - target: GlacierBMSDomain
+      - target: ANTuRideDomain
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide.tests
         GENERATE_INFOPLIST_FILE: YES
 
-  GlacierBMSUITests:
+  ANTuRideUITests:
     type: bundle.ui-testing
     platform: iOS
     deploymentTarget: "16.0"
     sources:
       - path: Tests/UITests
     dependencies:
-      - target: GlacierBMS
+      - target: ANTuRide
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide.uitests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: GlacierBMS
+        TEST_TARGET_NAME: ANTuRide
 
 schemes:
-  GlacierBMS:
+  ANTuRide:
     build:
       targets:
-        GlacierBMS: all
-        GlacierBMSDomain: all
-        GlacierBMSTests: [test]
-        GlacierBMSUITests: [test]
+        ANTuRide: all
+        ANTuRideDomain: all
+        ANTuRideTests: [test]
+        ANTuRideUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - GlacierBMSTests
-        - GlacierBMSUITests
+        - ANTuRideTests
+        - ANTuRideUITests
     profile:
       config: Release
     analyze:

@@ -1,4 +1,4 @@
-# GlacierBMS iOS GitHub 构建结果记录
+# ANTuRide iOS GitHub 构建结果记录
 
 > 记录时间：2026-10-10 00:05（北京时间）
 > 仓库：`https://github.com/River-1024/GlacierBMS-iOS`（私有）
@@ -31,7 +31,7 @@
 | Run ID | 提交 | 结论 | 说明 |
 |---|---|---|---|
 | 37955477377 | `f1d125e` | 成功 | 阶段 1 + Liquid Glass 全量验证，Xcode 26.3 / iOS 26.2 SDK |
-| 37955009497 | `a727064` | 失败 | 视图引用领域类型缺少 `import GlacierBMSDomain` |
+| 37955009497 | `a727064` | 失败 | 视图引用领域类型缺少 `import ANTuRideDomain` |
 | 37954671402 | `697d003` | 失败 | `0x11` 功率偏移测试修正前（功率实际在 @106） |
 | 37954407098 | `e4be94d` | 失败 | 阶段 1 首轮（功率偏移与 domain 导入问题暴露） |
 | 37949795350 | `15f4a79` | 成功 | 收尾提交，隐私审计与构建结果文档 |
@@ -47,9 +47,9 @@
 
 | 产物名 | 来源运行 | 大小 | 保留 | 状态 |
 |---|---|---|---|---|
-| `GlacierBMS-unsigned-ipa` | `37955477377`（`f1d125e`） | 196412 字节 | 7 天 | 未过期 |
+| `ANTuRide-unsigned-ipa` | `37955477377`（`f1d125e`） | 196412 字节 | 7 天 | 未过期 |
 
-产物为 `GlacierBMS.ipa`（内部 `Payload/GlacierBMS.app`），已包含阶段 1 界面与液态玻璃样式；工作流断言不含 `embedded.mobileprovision`。此前阶段 0 产物为 75224 字节，体积增长来自新增 UI 与样式代码。
+产物为 `ANTuRide.ipa`（内部 `Payload/ANTuRide.app`），已包含阶段 1 界面与液态玻璃样式；工作流断言不含 `embedded.mobileprovision`。此前阶段 0 产物为 75224 字节，体积增长来自新增 UI 与样式代码。
 
 ## 5. 产物可用性边界
 
@@ -59,10 +59,10 @@
 
 ## 6. 复现方式
 
-在 GitHub Actions 页面打开对应 Run，从其 Artifacts 区域下载 `GlacierBMS-unsigned-ipa`；或使用命令行：
+在 GitHub Actions 页面打开对应 Run，从其 Artifacts 区域下载 `ANTuRide-unsigned-ipa`；或使用命令行：
 
 ```bash
-gh run download 37955477377 -R River-1024/GlacierBMS-iOS -n GlacierBMS-unsigned-ipa
+gh run download 37955477377 -R River-1024/GlacierBMS-iOS -n ANTuRide-unsigned-ipa
 ```
 
 本地 macOS 复现：
@@ -72,8 +72,8 @@ brew install xcodegen
 xcodegen generate
 swift test
 xcodebuild test \
-  -project GlacierBMS.xcodeproj \
-  -scheme GlacierBMS \
+  -project ANTuRide.xcodeproj \
+  -scheme ANTuRide \
   -destination 'platform=iOS Simulator,name=iPhone 15' \
   CODE_SIGNING_ALLOWED=NO
 ```

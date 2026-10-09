@@ -1,5 +1,5 @@
 import XCTest
-@testable import GlacierBMSDomain
+@testable import ANTuRideDomain
 
 final class BmsFreshnessTests: XCTestCase {
     private func makeSnapshot(receivedAt: Date) -> BmsSnapshot {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import GlacierBMSDomain
+@testable import ANTuRideDomain
 
 final class BmsSnapshotTests: XCTestCase {
     func testSnapshotExposesCellExtremes() {

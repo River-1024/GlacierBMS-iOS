@@ -1,6 +1,6 @@
 # 隐私说明
 
-GlacierBMS（显示名称：冰川智舱）首版是个人使用的原生 iOS 仪表盘。当前代码不包含账号系统、广告 SDK、分析 SDK、云同步、HTTP API 或 WebSocket 上报。
+ANTuRide（显示名称：安途）首版是个人使用的原生 iOS 仪表盘。当前代码不包含账号系统、广告 SDK、分析 SDK、云同步、HTTP API 或 WebSocket 上报。
 
 ## 当前处理的数据
 

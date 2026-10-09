@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct GlacierBMSApp: App {
+struct ANTuRideApp: App {
     @StateObject private var appModel = AppModel()
     @StateObject private var bmsService = BmsBluetoothService()
 

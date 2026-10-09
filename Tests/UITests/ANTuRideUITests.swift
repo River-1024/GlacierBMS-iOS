@@ -1,6 +1,6 @@
 import XCTest
 
-final class GlacierBMSTests: XCTestCase {
+final class ANTuRideUITests: XCTestCase {
     func testLaunchSmoke() throws {
         let app = XCUIApplication()
         app.launch()

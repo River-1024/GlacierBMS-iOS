@@ -1,5 +1,5 @@
 import XCTest
-@testable import GlacierBMSDomain
+@testable import ANTuRideDomain
 
 final class AntProtocolTests: XCTestCase {
     func testQueryCommandMatchesAndroidCapture() {

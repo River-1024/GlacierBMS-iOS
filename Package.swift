@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "GlacierBMSDomain",
+    name: "ANTuRideDomain",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "GlacierBMSDomain", targets: ["GlacierBMSDomain"])
+        .library(name: "ANTuRideDomain", targets: ["ANTuRideDomain"])
     ],
     targets: [
         .target(
-            name: "GlacierBMSDomain",
+            name: "ANTuRideDomain",
             path: "Sources/Domain"
         ),
         .testTarget(
-            name: "GlacierBMSDomainTests",
-            dependencies: ["GlacierBMSDomain"],
+            name: "ANTuRideDomainTests",
+            dependencies: ["ANTuRideDomain"],
             path: "Tests/UnitTests"
         )
     ]
