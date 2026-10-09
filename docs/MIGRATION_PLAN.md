@@ -207,3 +207,13 @@ xcodebuild -project GlacierBMS.xcodeproj \
 - iOS 后台执行受系统生命周期约束，不能预先保证静音音频或画中画保活长期稳定。
 - ANT BMS 的真实通知分片、设备权限和不同固件字段需要真机确认。
 - 当前 Android 工作区存在未提交改动；iOS 施工不得修改或回退这些改动。
+## 9. 新仓库与 GitHub 编译服务
+
+- 新建 GitHub 私有仓库：`https://github.com/River-1024/GlacierBMS-iOS`。
+- 本项目完全独立创建，不导入、不合并、不引用旧 iOS 仓库代码。
+- 项目名称：`GlacierBMS`；App 显示名称：`冰川智舱`；Bundle ID：`com.zjsf.glacierbms`。
+- 隐私审计结果：未发现 Token、密钥、证书、描述文件、真实 BLE 地址、GPS 轨迹、本机路径或媒体文件；当前首版不声明摄像头、麦克风、照片或音频权限。
+- GitHub Actions 工作流：`.github/workflows/build.yml`。
+- GitHub-hosted macOS 编译验证：Run `37941766064` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建。
+- CI 产物名称：`GlacierBMS-unsigned-ipa`，保留 7 天；从该次 Actions 运行页面的 Artifacts 下载。
+- 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
