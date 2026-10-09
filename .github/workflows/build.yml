@@ -77,6 +77,17 @@ jobs:
             exit 1
           fi
 
+      - name: Verify app bundle contents
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/ANTuRide.app"
+          test -d "${APP_PATH}"
+          test -f "${APP_PATH}/Assets.car" || { echo 'Assets.car missing: asset catalog not in resources phase' >&2; exit 1; }
+          test -f "${APP_PATH}/PrivacyInfo.xcprivacy" || { echo 'PrivacyInfo.xcprivacy missing: privacy manifest not in resources phase' >&2; exit 1; }
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${APP_PATH}/Info.plist")" = "AppIcon"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP_PATH}/Info.plist")" = "com.zjsf.anturide"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${APP_PATH}/Info.plist")" = "安途"
+
       - name: Upload unsigned iOS artifact
         uses: actions/upload-artifact@v4
         with:

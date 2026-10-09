@@ -121,6 +121,14 @@ git ls-files
 | 新增过滤开关 | `BmsBluetoothService.isKeywordFilterEnabled`（默认开启，`UserDefaults` 持久化）；关闭后列出附近全部设备。功能项，非纯文案 |
 | 新增资源 | `Resources/Assets.xcassets`，`ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` |
 
+### 7.1 资源打包缺陷修复（同批）
+
+改名为 `ANTuRide` 后核验无签名 IPA，发现 `Payload/ANTuRide.app` 内**既无 `Assets.car` 也无 `PrivacyInfo.xcprivacy`**：`project.yml` 中 target 级 `resources:` 键不生效，资源从未进入 Copy Bundle Resources 构建阶段。这意味着隐私清单自加入起一直未随包发布，本次新增的 App 图标也不会生效。
+
+修复方式：改用 XcodeGen 正式写法 `sources:` + `buildPhase: resources` 声明 `Resources/Assets.xcassets` 与 `Resources/PrivacyInfo.xcprivacy`；并在 Info.plist 显式声明 `CFBundleIconName: AppIcon`。
+
+防回归：CI 新增 `Verify app bundle contents` 步骤，构建后断言 `Assets.car`、`PrivacyInfo.xcprivacy` 存在，且 `CFBundleIconName = AppIcon`、`CFBundleIdentifier = com.zjsf.anturide`、`CFBundleDisplayName = 安途`，任一不符即让构建失败。
+
 保留项：GitHub 远程仓库地址 `https://github.com/River-1024/GlacierBMS-iOS` 未改写。该地址属外部资源标识，GitHub 在仓库改名后会对旧地址自动重定向，保留原值比抢先改写更稳妥；如需同步，应在 GitHub 完成仓库改名后再更新文档。
 
 改名复核命令：

@@ -164,7 +164,8 @@
 - [x] 2026-10-10 真机确认：全屏铺满显示正常（`UILaunchScreen` 修复生效），液态玻璃界面正常渲染。
 - [x] 2026-10-10 项目更名为 `ANTuRide`（显示名「安途」）：Xcode 工程与 4 个 target、Bundle ID、Swift 模块名（`ANTuRideDomain`）、CI 工作流与产物名及全部文档同步替换。详见 `docs/PRIVACY_AUDIT.md` 第 7 节。
 - [x] 2026-10-10 扫描过滤改为默认 `["ant", "apt"]`（ant = ANT BMS 电池保护板，apt = APT 电机控制器），并新增可持久化开关 `isKeywordFilterEnabled`（默认开启）；设备页提供 Toggle，关闭后列出附近全部蓝牙设备，切换后自动重启扫描刷新结果。
-- [x] 2026-10-10 新增 App 图标：`Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`（1024×1024 无透明通道 PNG），`project.yml` 设置 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 并将资产目录加入 app target 资源。
+- [x] 2026-10-10 新增 App 图标：`Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`（1024×1024 无透明通道 PNG），`project.yml` 设置 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。
+- [x] 2026-10-10 修复资源打包缺陷：核验 IPA 发现 `Assets.car` 与 `PrivacyInfo.xcprivacy` 均未进包，根因是 `project.yml` 使用了不生效的 target 级 `resources:` 键；改为 `sources:` + `buildPhase: resources`，并补 `CFBundleIconName: AppIcon`。CI 增加 `Verify app bundle contents` 断言步骤防回归。详见 `docs/PRIVACY_AUDIT.md` 第 7.1 节。
 - [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 

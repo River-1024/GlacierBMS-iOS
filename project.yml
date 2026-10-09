@@ -31,15 +31,21 @@ targets:
       - path: Sources/Services
       - path: Sources/Features
       - path: Sources/DesignSystem
-    resources:
-      - path: Resources/PrivacyInfo.xcprivacy
+      # 资源必须走 sources + buildPhase: resources；target 级 `resources` 键
+      # 不生效，会导致 Assets.car 与 PrivacyInfo.xcprivacy 不进包。
       - path: Resources/Assets.xcassets
+        buildPhase: resources
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - target: ANTuRideDomain
     info:
       path: Support/Info.plist
       properties:
         CFBundleDisplayName: 安途
+        # 显式声明图标名，与 ASSETCATALOG_COMPILER_APPICON_NAME 一致，
+        # 确保 Assets.car 中的 AppIcon 能在系统与应用商店侧被解析。
+        CFBundleIconName: AppIcon
         # 关键修复：没有 UILaunchScreen 声明时 iOS 会把 App 按旧分辨率
         # 信箱化渲染（表现为屏幕中间一小块）。空字典即启用系统生成的
         # 启动屏，使 App 全屏铺满真机。
