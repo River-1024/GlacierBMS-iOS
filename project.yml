@@ -20,6 +20,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.domain
+        GENERATE_INFOPLIST_FILE: YES
 
   GlacierBMS:
     type: application
