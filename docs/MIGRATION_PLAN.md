@@ -147,6 +147,11 @@
 - [x] 阶段 0 已加入协议查询命令、`7E A1`/`AA 55` 分片合包、`0x11` 状态解析和畸形帧防护。
 - [x] 已建立独立 `iOS/.git`，避免父 Android 仓库的 `/iOS/` 忽略规则吞掉 iOS 工程。
 - [x] Windows 静态检查已完成：关键文件存在、关键协议符号存在、Swift 大括号平衡通过。
+- [x] 已新建独立私有仓库 `https://github.com/River-1024/GlacierBMS-iOS` 并推送全部提交；本项目独立创建，不引用、不合并旧 iOS 项目。
+- [x] 已在 GitHub-hosted macOS runner 上通过 CI：SwiftPM 测试、iOS 模拟器测试、无签名设备构建。
+- [x] 已产出无签名 IPA 产物 `GlacierBMS-unsigned-ipa`。
+- [x] 已完成隐私与凭据审计，记录于 `docs/PRIVACY_AUDIT.md`。
+- [x] 已记录 GitHub 构建结果，记录于 `docs/CI_BUILD_RESULTS.md`。
 - [ ] 阶段 0 协议和合包测试待 macOS/Xcode 执行。
 - [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始。
 
@@ -212,8 +217,9 @@ xcodebuild -project GlacierBMS.xcodeproj \
 - 新建 GitHub 私有仓库：`https://github.com/River-1024/GlacierBMS-iOS`。
 - 本项目完全独立创建，不导入、不合并、不引用旧 iOS 仓库代码。
 - 项目名称：`GlacierBMS`；App 显示名称：`冰川智舱`；Bundle ID：`com.zjsf.glacierbms`。
-- 隐私审计结果：未发现 Token、密钥、证书、描述文件、真实 BLE 地址、GPS 轨迹、本机路径或媒体文件；当前首版不声明摄像头、麦克风、照片或音频权限。
+- 隐私审计结果：未发现 Token、密钥、证书、描述文件、真实 BLE 地址、GPS 轨迹、本机路径或媒体文件；当前首版不声明摄像头、麦克风、照片或音频权限。完整记录见 `docs/PRIVACY_AUDIT.md`。
 - GitHub Actions 工作流：`.github/workflows/build.yml`。
-- GitHub-hosted macOS 编译验证：Run `37941766064` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建。
-- CI 产物名称：`GlacierBMS-unsigned-ipa`，保留 7 天；从该次 Actions 运行页面的 Artifacts 下载。
+- GitHub-hosted macOS 编译验证：当前 `main`（`1899dcc`）对应的 Run `37946393492` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
+- CI 产物名称：`GlacierBMS-unsigned-ipa`，保留 7 天；从最新成功运行页面的 Artifacts 下载。
 - 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
+- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，已跟踪文件 21 个，无凭据与旧项目引用。
