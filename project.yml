@@ -1,0 +1,92 @@
+name: GlacierBMS
+options:
+  bundleIdPrefix: com.zjsf
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  GlacierBMSDomain:
+    type: framework
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources/Domain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.domain
+
+  GlacierBMS:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources/App
+      - path: Sources/Services
+      - path: Sources/Features
+      - path: Sources/DesignSystem
+    dependencies:
+      - target: GlacierBMSDomain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "连接 ANT BMS 读取电池状态"
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "记录速度、里程和行程能耗"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+
+  GlacierBMSTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Tests/UnitTests
+    dependencies:
+      - target: GlacierBMSDomain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  GlacierBMSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Tests/UITests
+    dependencies:
+      - target: GlacierBMS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: GlacierBMS
+
+schemes:
+  GlacierBMS:
+    build:
+      targets:
+        GlacierBMS: all
+        GlacierBMSDomain: all
+        GlacierBMSTests: [test]
+        GlacierBMSUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - GlacierBMSTests
+        - GlacierBMSUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
