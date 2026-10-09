@@ -3,14 +3,18 @@ import CoreBluetooth
 import Foundation
 import GlacierBMSDomain
 
+/// ANT BMS 蓝牙链路。阶段 1 约束：
+/// - 扫描结果以列表呈现，由用户选择设备，不自动连接。
+/// - Notify 开启后才允许周期查询。
+/// - 意外断开时清理会话后自动重试同一外设一次，不重复创建会话。
 @MainActor
 public final class BmsBluetoothService: NSObject, ObservableObject {
     public static let bmsServiceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
     public static let bmsCharacteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
-
-    @Published public private(set) var state: State = .idle
-    @Published public private(set) var latestSnapshot: BmsSnapshot?
-    @Published public private(set) var lastError: String?
+    /// 周期查询间隔，与 Android 端节奏一致。
+    public static let queryInterval: TimeInterval = 1.0
+    /// 名称过滤关键字（大小写不敏感），兼容不广播 FFE0 服务的固件。
+    static let nameKeywords = ["ant", "bms", "glacier"]
 
     public enum State: Equatable {
         case idle
@@ -19,13 +23,32 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
         case connecting
         case discovering
         case ready
+        case reconnecting
         case disconnected
     }
 
+    public struct DiscoveredDevice: Identifiable, Equatable {
+        public let id: UUID
+        public let name: String
+        public let rssi: Int
+    }
+
+    @Published public private(set) var state: State = .idle
+    @Published public private(set) var discoveredDevices: [DiscoveredDevice] = []
+    @Published public private(set) var connectedDeviceName: String?
+    @Published public private(set) var latestSnapshot: BmsSnapshot?
+    @Published public private(set) var snapshotHistory: [BmsSnapshot] = []
+    @Published public private(set) var lastError: String?
+
     private let central: CBCentralManager
     private let assembler = BmsFrameAssembler()
+    private let maximumHistoryCount = 120
+
     private var peripheral: CBPeripheral?
     private var characteristic: CBCharacteristic?
+    private var queryTimer: Timer?
+    private var isUserInitiatedDisconnect = false
+    private var deviceSummaries: [UUID: DiscoveredDevice] = [:]
 
     public override init() {
         central = CBCentralManager(delegate: nil, queue: .main)
@@ -33,35 +56,104 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
         central.delegate = self
     }
 
+    // MARK: - 扫描
+
     public func startScan() {
-        guard central.state == .poweredOn else { state = .poweredOff; return }
+        guard central.state == .poweredOn else {
+            state = .poweredOff
+            lastError = "蓝牙未开启"
+            return
+        }
+        deviceSummaries.removeAll()
+        discoveredDevices = []
         state = .scanning
-        central.scanForPeripherals(withServices: [Self.bmsServiceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        // 不按服务过滤扫描：部分 ANT BMS 固件不广播 FFE0，
+        // 由 didDiscover 回调按广播服务与名称关键字过滤。
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
 
     public func stopScan() {
+        guard central.state == .poweredOn else { return }
         central.stopScan()
         if state == .scanning { state = .idle }
     }
 
+    // MARK: - 连接
+
+    public func connect(to id: UUID) {
+        guard central.state == .poweredOn else {
+            state = .poweredOff
+            lastError = "蓝牙未开启"
+            return
+        }
+        guard let target = central.retrievePeripherals(withIdentifiers: [id]).first else {
+            lastError = "设备已不可用，请重新扫描"
+            return
+        }
+        stopScan()
+        isUserInitiatedDisconnect = false
+        peripheral = target
+        target.delegate = self
+        state = .connecting
+        central.connect(target, options: nil)
+    }
+
     public func disconnect() {
-        if let peripheral { central.cancelPeripheralConnection(peripheral) }
-        assembler.reset()
-        peripheral = nil
-        characteristic = nil
+        isUserInitiatedDisconnect = true
+        stopQueryTimer()
+        if let peripheral {
+            central.cancelPeripheralConnection(peripheral)
+        }
+        teardownSession()
         state = .disconnected
     }
 
-    private func sendQueryIfReady() {
-        guard let peripheral, let characteristic,
-              characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse) else { return }
-        let type: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        let maximum = peripheral.maximumWriteValueLength(for: type)
-        guard maximum >= AntProtocol.queryCommand.count else {
-            lastError = "BLE 写入长度不足"
-            return
+    private func teardownSession() {
+        assembler.reset()
+        characteristic = nil
+        stopQueryTimer()
+    }
+
+    // MARK: - 周期查询
+
+    private func startQueryTimer() {
+        stopQueryTimer()
+        let timer = Timer.scheduledTimer(withTimeInterval: Self.queryInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.sendQueryIfReady()
+            }
         }
-        peripheral.writeValue(AntProtocol.queryCommand, for: characteristic, type: type)
+        queryTimer = timer
+        sendQueryIfReady()
+    }
+
+    private func stopQueryTimer() {
+        queryTimer?.invalidate()
+        queryTimer = nil
+    }
+
+    private func sendQueryIfReady() {
+        guard state == .ready, let peripheral, let characteristic else { return }
+        if characteristic.properties.contains(.writeWithoutResponse) {
+            guard peripheral.canSendWriteWithoutResponse else { return }
+            peripheral.writeValue(AntProtocol.queryCommand, for: characteristic, type: .withoutResponse)
+        } else if characteristic.properties.contains(.write) {
+            peripheral.writeValue(AntProtocol.queryCommand, for: characteristic, type: .withResponse)
+        }
+    }
+
+    private func recordSnapshot(_ snapshot: BmsSnapshot) {
+        latestSnapshot = snapshot
+        snapshotHistory.append(snapshot)
+        if snapshotHistory.count > maximumHistoryCount {
+            snapshotHistory.removeFirst(snapshotHistory.count - maximumHistoryCount)
+        }
+    }
+
+    private func isCandidate(advertisedServices: [CBUUID], name: String) -> Bool {
+        if advertisedServices.contains(Self.bmsServiceUUID) { return true }
+        let lowered = name.lowercased()
+        return Self.nameKeywords.contains { lowered.contains($0) }
     }
 }
 
@@ -69,18 +161,28 @@ extension BmsBluetoothService: CBCentralManagerDelegate {
     public nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.state = central.state == .poweredOn ? .idle : .poweredOff
+            if central.state == .poweredOn {
+                if self.state == .poweredOff {
+                    self.state = self.peripheral == nil ? .idle : .disconnected
+                }
+                self.lastError = nil
+            } else {
+                self.teardownSession()
+                self.state = .poweredOff
+            }
         }
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        let advertisedServices = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
+        let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+        let resolvedName = localName ?? peripheral.name ?? "未命名设备"
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.peripheral = peripheral
-            self.state = .connecting
-            central.stopScan()
-            peripheral.delegate = self
-            central.connect(peripheral, options: nil)
+            guard self.isCandidate(advertisedServices: advertisedServices, name: resolvedName) else { return }
+            let device = DiscoveredDevice(id: peripheral.identifier, name: resolvedName, rssi: RSSI.intValue)
+            self.deviceSummaries[device.id] = device
+            self.discoveredDevices = self.deviceSummaries.values.sorted { $0.rssi > $1.rssi }
         }
     }
 
@@ -88,17 +190,35 @@ extension BmsBluetoothService: CBCentralManagerDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.state = .discovering
+            self.connectedDeviceName = peripheral.name ?? self.deviceSummaries[peripheral.identifier]?.name
             peripheral.discoverServices([Self.bmsServiceUUID])
+        }
+    }
+
+    public nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.teardownSession()
+            self.state = .disconnected
+            self.lastError = error?.localizedDescription ?? "连接失败"
         }
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.assembler.reset()
-            self.characteristic = nil
-            self.state = .disconnected
+            self.teardownSession()
+            if self.isUserInitiatedDisconnect {
+                self.state = .disconnected
+                return
+            }
+            // 意外断开：先清理合包与特征状态，再对同一外设自动重试一次。
+            self.state = .reconnecting
             self.lastError = error?.localizedDescription
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard self.state == .reconnecting, !self.isUserInitiatedDisconnect else { return }
+            self.state = .connecting
+            central.connect(peripheral, options: nil)
         }
     }
 }
@@ -109,7 +229,8 @@ extension BmsBluetoothService: CBPeripheralDelegate {
             guard let self else { return }
             guard error == nil,
                   let service = peripheral.services?.first(where: { $0.uuid == Self.bmsServiceUUID }) else {
-                self.lastError = error?.localizedDescription ?? "未找到 BMS 服务"
+                self.lastError = error?.localizedDescription ?? "未找到 BMS 服务 (FFE0)"
+                self.state = .disconnected
                 return
             }
             peripheral.discoverCharacteristics([Self.bmsCharacteristicUUID], for: service)
@@ -121,7 +242,8 @@ extension BmsBluetoothService: CBPeripheralDelegate {
             guard let self else { return }
             guard error == nil,
                   let characteristic = service.characteristics?.first(where: { $0.uuid == Self.bmsCharacteristicUUID }) else {
-                self.lastError = error?.localizedDescription ?? "未找到 BMS 特征"
+                self.lastError = error?.localizedDescription ?? "未找到 BMS 特征 (FFE1)"
+                self.state = .disconnected
                 return
             }
             self.characteristic = characteristic
@@ -134,10 +256,13 @@ extension BmsBluetoothService: CBPeripheralDelegate {
             guard let self else { return }
             guard error == nil, characteristic.isNotifying else {
                 self.lastError = error?.localizedDescription ?? "开启 BMS 通知失败"
+                self.state = .disconnected
                 return
             }
+            // Notify 开启成功后才开始周期查询。
             self.state = .ready
-            self.sendQueryIfReady()
+            self.lastError = nil
+            self.startQueryTimer()
         }
     }
 
@@ -149,7 +274,9 @@ extension BmsBluetoothService: CBPeripheralDelegate {
                 return
             }
             for frame in self.assembler.append(value) {
-                self.latestSnapshot = AntProtocol.parseStatusResponse(frame)
+                if let snapshot = AntProtocol.parseStatusResponse(frame) {
+                    self.recordSnapshot(snapshot)
+                }
             }
         }
     }

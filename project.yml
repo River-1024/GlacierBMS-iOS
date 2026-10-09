@@ -6,7 +6,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -35,14 +35,26 @@ targets:
       - path: Resources/PrivacyInfo.xcprivacy
     dependencies:
       - target: GlacierBMSDomain
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: 冰川智舱
+        # 关键修复：没有 UILaunchScreen 声明时 iOS 会把 App 按旧分辨率
+        # 信箱化渲染（表现为屏幕中间一小块）。空字典即启用系统生成的
+        # 启动屏，使 App 全屏铺满真机。
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSBluetoothAlwaysUsageDescription: 连接 ANT BMS 读取电池状态
+        NSLocationWhenInUseUsageDescription: 记录速度、里程和行程能耗
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.glacierbms
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "连接 ANT BMS 读取电池状态"
-        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "记录速度、里程和行程能耗"
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         GENERATE_INFOPLIST_FILE: YES
 

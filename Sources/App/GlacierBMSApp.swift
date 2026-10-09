@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct GlacierBMSApp: App {
     @StateObject private var appModel = AppModel()
+    @StateObject private var bmsService = BmsBluetoothService()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(appModel)
+                .environmentObject(bmsService)
                 .preferredColorScheme(appModel.colorScheme)
         }
     }

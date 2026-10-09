@@ -22,4 +22,6 @@ swift test
 
 阶段 0：SwiftUI App 壳、协议解析、分片合包、BMS 模型、CoreBluetooth 服务骨架和测试。
 
-阶段 1 及以后需要 GitHub Actions 或真实 iPhone/BMS 验证，不能用 Windows 静态检查代替。
+阶段 1（代码已完成，待真机验收）：设备扫描与选择、周期查询、实时仪表盘绑定、详情页、数据新鲜度与断开重连；iOS 26 设备自动启用 Liquid Glass 液态玻璃材质，旧系统回退普通材质。
+
+阶段 1 及以后的真机验收需要真实 iPhone + ANT BMS，不能用 GitHub Actions 或 Windows 静态检查代替。

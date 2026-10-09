@@ -1,7 +1,7 @@
 # 冰川智舱 原生 iOS 首版总体规划与施工进度
 
-> 更新时间：2026-10-09 15:15（北京时间）  
-> 状态：首版施工中  
+> 更新时间：2026-10-09 23:40（北京时间）  
+> 状态：阶段 1 代码施工完成，待真机验收  
 > 目标：使用 SwiftUI + CoreBluetooth 建立一款可由个人签名安装的原生 iOS 驾驶仪表盘。
 
 ## 1. 已确认产品决策
@@ -68,9 +68,11 @@
 - 未知或不完整字段不得产生伪造零值。
 - Windows 环境只做文件和静态检查；Swift/Xcode 结果必须标记为待 macOS 验证。
 
-### 阶段 1：BMS 真机链路与仪表盘
+### 阶段 1：BMS 真机链路与仪表盘（代码已完成，待真机验收）
 
 目标：在真实 iPhone 上完成扫描、连接、Notify、周期查询、断开和恢复。
+
+> 2026-10-09 施工记录：扫描/选择/周期查询/新鲜度/重连的代码与 UI 绑定已完成；扫描策略为全量扫描后按 FFE0 广播服务或名称关键字（ant/bms/glacier）过滤，兼容不广播 FFE0 的固件；GPS 速度仍属阶段 2。
 
 交付：
 
@@ -152,8 +154,13 @@
 - [x] 已产出无签名 IPA 产物 `GlacierBMS-unsigned-ipa`。
 - [x] 已完成隐私与凭据审计，记录于 `docs/PRIVACY_AUDIT.md`。
 - [x] 已记录 GitHub 构建结果，记录于 `docs/CI_BUILD_RESULTS.md`。
-- [ ] 阶段 0 协议和合包测试待 macOS/Xcode 执行。
-- [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始。
+- [x] 2026-10-09 真机反馈修复：App 仅屏幕中间显示的根因是 `project.yml` 缺少 `UILaunchScreen` 声明，iOS 按旧分辨率信箱化渲染；已加入显式 Info.plist（启动屏、竖/横屏方向、蓝牙与定位用途说明），并将设备家族收敛为 iPhone。
+- [x] 2026-10-09 已接入 iOS 26 Liquid Glass：`glassCard`/强调按钮走 `#available(iOS 26.0, *)` 门控，iOS 16–25 回退分组背景；CI 增加最新 Xcode 选择步骤以获得 iOS 26 SDK。注：iOS 25 版本号不存在，液态玻璃属 iOS 26。
+- [x] 2026-10-09 阶段 1 代码施工：设备扫描列表（RSSI 排序 + FFE0 服务/名称关键字过滤）、用户选择连接、Notify 后 1 秒周期查询、快照历史 120 条、意外断开自动重连一次、`didFailToConnect` 与发现服务失败状态回退。
+- [x] 2026-10-09 阶段 1 UI 绑定：设备页、详情页（单体/温度/MOS/运行时长）、仪表盘实时绑定（电压/电流/功率/SOC/Ah/SOH/状态），Canvas 电流曲线，数据新鲜度徽标（noData/fresh/stale）。
+- [x] 2026-10-09 新增 `BmsFreshnessEvaluator` 领域评估器与单元测试；扩展 `0x11` 解析测试锁定电流/SOC/功率偏移。
+- [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
+- [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
 ## 5.1 阶段 0 当前施工清单
 
