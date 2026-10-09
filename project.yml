@@ -31,6 +31,8 @@ targets:
       - path: Sources/Services
       - path: Sources/Features
       - path: Sources/DesignSystem
+    resources:
+      - path: Resources/PrivacyInfo.xcprivacy
     dependencies:
       - target: GlacierBMSDomain
     settings:
