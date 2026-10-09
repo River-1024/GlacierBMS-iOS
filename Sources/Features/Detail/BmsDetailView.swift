@@ -1,3 +1,4 @@
+import GlacierBMSDomain
 import SwiftUI
 
 /// BMS 详情页：单体电压、温度、MOS 与运行信息。

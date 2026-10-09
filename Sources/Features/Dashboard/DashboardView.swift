@@ -1,3 +1,4 @@
+import GlacierBMSDomain
 import SwiftUI
 
 /// 首页驾驶仪表盘。阶段 1 绑定 BMS 实时数据；
