@@ -41,6 +41,7 @@ targets:
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "记录速度、里程和行程能耗"
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
+        GENERATE_INFOPLIST_FILE: YES
 
   GlacierBMSTests:
     type: bundle.unit-test
