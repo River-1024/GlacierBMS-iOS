@@ -159,7 +159,8 @@
 - [x] 2026-10-09 阶段 1 代码施工：设备扫描列表（RSSI 排序 + FFE0 服务/名称关键字过滤）、用户选择连接、Notify 后 1 秒周期查询、快照历史 120 条、意外断开自动重连一次、`didFailToConnect` 与发现服务失败状态回退。
 - [x] 2026-10-09 阶段 1 UI 绑定：设备页、详情页（单体/温度/MOS/运行时长）、仪表盘实时绑定（电压/电流/功率/SOC/Ah/SOH/状态），Canvas 电流曲线，数据新鲜度徽标（noData/fresh/stale）。
 - [x] 2026-10-09 新增 `BmsFreshnessEvaluator` 领域评估器与单元测试；扩展 `0x11` 解析测试锁定电流/SOC/功率偏移。
-- [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
+- [x] 2026-10-10 阶段 1 CI 验证通过：Run `37955477377`（`f1d125e`）在 Xcode 26.3 / iOS 26.2 SDK 上完成 SwiftPM 测试、模拟器测试与无签名设备构建；经两轮修复（`0x11` 功率偏移 @106、视图补 `import GlacierBMSDomain`）。
+- [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复、全屏铺满与液态玻璃实机效果需真机）。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
 ## 5.1 阶段 0 当前施工清单
@@ -226,7 +227,7 @@ xcodebuild -project GlacierBMS.xcodeproj \
 - 项目名称：`GlacierBMS`；App 显示名称：`冰川智舱`；Bundle ID：`com.zjsf.glacierbms`。
 - 隐私审计结果：未发现 Token、密钥、证书、描述文件、真实 BLE 地址、GPS 轨迹、本机路径或媒体文件；当前首版不声明摄像头、麦克风、照片或音频权限。完整记录见 `docs/PRIVACY_AUDIT.md`。
 - GitHub Actions 工作流：`.github/workflows/build.yml`。
-- GitHub-hosted macOS 编译验证：当前 `main`（`15f4a79`）对应的 Run `37949795350` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
+- GitHub-hosted macOS 编译验证：当前 `main`（`f1d125e`）对应的 Run `37955477377` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建，运行环境为 Xcode 26.3 / iOS 26.2 SDK（液态玻璃 API 首次编译通过）；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
 - CI 产物名称：`GlacierBMS-unsigned-ipa`，保留 7 天；从最新成功运行页面的 Artifacts 下载。
 - 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
-- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，已跟踪文件 23 个，无凭据与旧项目引用；`.workbuddy/` 已加入 `.gitignore`，不进入仓库。
+- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，无凭据与旧项目引用；`.workbuddy/` 已加入 `.gitignore`，不进入仓库。
