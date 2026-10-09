@@ -54,7 +54,7 @@ struct BmsDetailView: View {
             }
             HStack {
                 summaryItem("总电压 mV", nil, valueText: String(Int(snapshot.totalVoltage * 1000)))
-                summaryItem("SOH", snapshot.soh.map { "\($0)%" })
+                summaryItem("SOH", nil, valueText: snapshot.soh.map { "\($0)%" })
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
