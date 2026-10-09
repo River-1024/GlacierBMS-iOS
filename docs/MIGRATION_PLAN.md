@@ -1,7 +1,7 @@
 # 安途（ANTuRide）原生 iOS 首版总体规划与施工进度
 
-> 更新时间：2026-10-10 00:20（北京时间）  
-> 状态：阶段 1 代码完成；全屏适配与液态玻璃真机验证通过，BMS 真机链路待验收  
+> 更新时间：2026-10-10 01:05（北京时间）  
+> 状态：阶段 1 代码完成；项目更名 `ANTuRide`（安途）已落地，全屏适配、液态玻璃、设备页过滤开关与 App 图标均已确认正常；BMS 真机链路待验收  
 > 目标：使用 SwiftUI + CoreBluetooth 建立一款可由个人签名安装的原生 iOS 驾驶仪表盘。
 
 ## 1. 已确认产品决策
@@ -166,6 +166,8 @@
 - [x] 2026-10-10 扫描过滤改为默认 `["ant", "apt"]`（ant = ANT BMS 电池保护板，apt = APT 电机控制器），并新增可持久化开关 `isKeywordFilterEnabled`（默认开启）；设备页提供 Toggle，关闭后列出附近全部蓝牙设备，切换后自动重启扫描刷新结果。
 - [x] 2026-10-10 新增 App 图标：`Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`（1024×1024 无透明通道 PNG），`project.yml` 设置 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。
 - [x] 2026-10-10 修复资源打包缺陷：核验 IPA 发现 `Assets.car` 与 `PrivacyInfo.xcprivacy` 均未进包，根因是 `project.yml` 使用了不生效的 target 级 `resources:` 键；改为 `sources:` + `buildPhase: resources`，并补 `CFBundleIconName: AppIcon`。CI 增加 `Verify app bundle contents` 断言步骤防回归。详见 `docs/PRIVACY_AUDIT.md` 第 7.1 节。
+- [x] 2026-10-10 更名与资源收尾验证：CI Run `37961690423`（`2e77a27`）全绿（5m52s），产物 1174236 字节、SHA-256 `197584f9dbe3a4481bd518c2eaeb094e0d99cb1ae4320e053c86b8c055312d9c`；解包核验包内已含 `Assets.car`（946264 字节）、`AppIcon60x60@2x.png`（120×120）、`PrivacyInfo.xcprivacy`（397 字节）与 `ANTuRideDomain.framework`，且无 `embedded.mobileprovision`。详见 `docs/CI_BUILD_RESULTS.md`。
+- [x] 2026-10-10 用户确认：设备页扫描过滤开关与 App 图标显示均正常（覆盖阶段 1 设备页 UI 与图标集成）。
 - [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
@@ -236,4 +238,5 @@ xcodebuild -project ANTuRide.xcodeproj \
 - GitHub-hosted macOS 编译验证：当前 `main`（`f1d125e`）对应的 Run `37955477377` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建，运行环境为 Xcode 26.3 / iOS 26.2 SDK（液态玻璃 API 首次编译通过）；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
 - CI 产物名称：`ANTuRide-unsigned-ipa`，保留 7 天；从最新成功运行页面的 Artifacts 下载。
 - 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
-- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，无凭据与旧项目引用；`.workbuddy/` 已加入 `.gitignore`，不进入仓库。
+- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，无凭据与旧项目引用；`.workbuddy/`、`build/`（CI 产物本地下载目录）与 `Support/Info.plist`（XcodeGen 生成）均已加入 `.gitignore`，不进入仓库。
+- 当前 HEAD：`c8853e7`（更名与图标批次：`a5ca7f8` 更名 + 图标 + 过滤开关，`2e77a27` 资源打包修复，`c8853e7` 构建记录）。
