@@ -219,7 +219,7 @@ xcodebuild -project GlacierBMS.xcodeproj \
 - 项目名称：`GlacierBMS`；App 显示名称：`冰川智舱`；Bundle ID：`com.zjsf.glacierbms`。
 - 隐私审计结果：未发现 Token、密钥、证书、描述文件、真实 BLE 地址、GPS 轨迹、本机路径或媒体文件；当前首版不声明摄像头、麦克风、照片或音频权限。完整记录见 `docs/PRIVACY_AUDIT.md`。
 - GitHub Actions 工作流：`.github/workflows/build.yml`。
-- GitHub-hosted macOS 编译验证：当前 `main`（`1899dcc`）对应的 Run `37946393492` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
+- GitHub-hosted macOS 编译验证：当前 `main`（`15f4a79`）对应的 Run `37949795350` 已成功完成 SwiftPM 测试、iOS 模拟器测试和无签名设备构建；完整运行历史见 `docs/CI_BUILD_RESULTS.md`。
 - CI 产物名称：`GlacierBMS-unsigned-ipa`，保留 7 天；从最新成功运行页面的 Artifacts 下载。
 - 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
-- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，已跟踪文件 21 个，无凭据与旧项目引用。
+- 工作树状态：`main` 与 `origin/main` 一致，工作树干净，已跟踪文件 23 个，无凭据与旧项目引用；`.workbuddy/` 已加入 `.gitignore`，不进入仓库。
