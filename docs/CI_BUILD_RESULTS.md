@@ -1,12 +1,14 @@
 # ANTuRide iOS GitHub 构建结果记录
 
-> 记录时间：2026-10-10 00:05（北京时间）
+> 记录时间：2026-10-10 00:55（北京时间，最近一次更新）
 > 仓库：`https://github.com/River-1024/GlacierBMS-iOS`（私有）
 > 工作流：`.github/workflows/build.yml`
 > 说明：本机（Windows）无 Swift/Xcode，iOS 编译与测试全部在 GitHub-hosted macOS runner 上执行。
 > 本文档为收尾时点快照；此后仅文档类提交不改变构建语义。
 
 ## 1. 结论
+
+**最近一次更新（2026-10-10 00:55）：** 项目更名为 `ANTuRide`（显示名「安途」）并加入 App 图标后，运行 `37961690423`（提交 `2e77a27`）在 Xcode 26.3 / iOS 26.2 SDK 上全绿，并首次通过新增的 `Verify app bundle contents` 断言步骤：`Assets.car`（946264 字节）与 `PrivacyInfo.xcprivacy`（397 字节）均在包内，`CFBundleIconName = AppIcon`、`CFBundleIdentifier = com.zjsf.anturide`、`CFBundleDisplayName = 安途`。该步骤同时修复了一个此前未被发现的缺陷——旧的 target 级 `resources:` 键不生效，导致资源与隐私清单从未进包（详见 `docs/PRIVACY_AUDIT.md` 第 7.1 节）。
 
 工作流已稳定通过。阶段 1 收尾提交 `f1d125e` 对应的运行 `37955477377` 成功完成以下四件事：
 
@@ -30,6 +32,8 @@
 
 | Run ID | 提交 | 结论 | 说明 |
 |---|---|---|---|
+| 37961690423 | `2e77a27` | 成功 | 资源打包修复（`sources` + `buildPhase: resources`）；新增资源断言通过；产物 1174236 字节 |
+| 37960334513 | `a5ca7f8` | 成功 | 更名 `ANTuRide` 与新增 App 图标后首次构建；核验发现 `Assets.car` / `PrivacyInfo.xcprivacy` 缺失 |
 | 37955477377 | `f1d125e` | 成功 | 阶段 1 + Liquid Glass 全量验证，Xcode 26.3 / iOS 26.2 SDK |
 | 37955009497 | `a727064` | 失败 | 视图引用领域类型缺少 `import ANTuRideDomain` |
 | 37954671402 | `697d003` | 失败 | `0x11` 功率偏移测试修正前（功率实际在 @106） |
@@ -47,9 +51,29 @@
 
 | 产物名 | 来源运行 | 大小 | 保留 | 状态 |
 |---|---|---|---|---|
-| `ANTuRide-unsigned-ipa` | `37955477377`（`f1d125e`） | 196412 字节 | 7 天 | 未过期 |
+| `ANTuRide-unsigned-ipa` | `37961690423`（`2e77a27`） | 1174236 字节 | 7 天 | 未过期 |
+| `ANTuRide-unsigned-ipa` | `37955477377`（`f1d125e`） | 196412 字节 | 7 天 | 已过期 |
 
-产物为 `ANTuRide.ipa`（内部 `Payload/ANTuRide.app`），已包含阶段 1 界面与液态玻璃样式；工作流断言不含 `embedded.mobileprovision`。此前阶段 0 产物为 75224 字节，体积增长来自新增 UI 与样式代码。
+产物为 `ANTuRide.ipa`（内部 `Payload/ANTuRide.app`），已包含阶段 1 界面、液态玻璃样式、App 图标与隐私清单；工作流断言不含 `embedded.mobileprovision`。体积变化：阶段 0 为 75224 字节，阶段 1 为 196412 字节（+UI 与样式），资源修复后为 1174236 字节（+`Assets.car` 946264 字节、图标 PNG 与 `PrivacyInfo.xcprivacy`）。
+
+产物内容（运行 `37961690423`，本机下载后核验）：
+
+| 条目 | 大小 |
+|---|---|
+| `ANTuRide.app/ANTuRide` | 768408 字节 |
+| `ANTuRide.app/Assets.car` | 946264 字节 |
+| `ANTuRide.app/AppIcon60x60@2x.png` | 19248 字节（120×120，Apple CgBI 优化 PNG） |
+| `ANTuRide.app/AppIcon76x76@2x~ipad.png` | 29028 字节 |
+| `ANTuRide.app/PrivacyInfo.xcprivacy` | 397 字节 |
+| `ANTuRide.app/Frameworks/ANTuRideDomain.framework/ANTuRideDomain` | 121672 字节 |
+
+核验命令：
+
+```bash
+gh run download 37961690423 -R River-1024/GlacierBMS-iOS -n ANTuRide-unsigned-ipa -D build/ci
+```
+
+SHA-256：`197584f9dbe3a4481bd518c2eaeb094e0d99cb1ae4320e053c86b8c055312d9c`
 
 ## 5. 产物可用性边界
 
