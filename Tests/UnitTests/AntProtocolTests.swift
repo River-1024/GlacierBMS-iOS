@@ -17,7 +17,8 @@ final class AntProtocolTests: XCTestCase {
 
     func testParsesCurrentSOCPowerAtLockedOffsets() {
         // 20 单体 + 2 温度下的 0x11 帧布局：
-        // 电流 @84（i16，0.1A）、SOC @86（u16，%）、功率 @100（i32，W）。
+        // 电流 @84（i16，0.1A）、SOC @86（u16，%）、SOH/MOS 块 @88（6B）、
+        // 容量块 @94（20B：容量/剩余/循环/功率/运行时长），功率 @106（i32，W）。
         let frame = makeFrame(cellCount: 20, temperatureCount: 2, currentA: 125, socPercent: 80, powerW: 1500)
         let snapshot = AntProtocol.parseStatusResponse(frame)
         XCTAssertNotNil(snapshot)
@@ -54,7 +55,8 @@ final class AntProtocolTests: XCTestCase {
         let soc = UInt16(clamping: socPercent)
         bytes[socOffset] = UInt8(soc & 0xFF)
         bytes[socOffset + 1] = UInt8(soc >> 8)
-        let powerOffset = socOffset + 2 + 12
+        // SOC 之后为 6 字节 SOH/充放电 MOS/均衡块，容量块内功率位于 +12。
+        let powerOffset = socOffset + 2 + 6 + 12
         let power = UInt32(clamping: powerW)
         bytes[powerOffset] = UInt8(power & 0xFF)
         bytes[powerOffset + 1] = UInt8((power >> 8) & 0xFF)
