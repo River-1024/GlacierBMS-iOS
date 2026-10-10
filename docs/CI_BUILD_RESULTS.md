@@ -1,6 +1,6 @@
 # ANTuRide iOS GitHub 构建结果记录
 
-> 记录时间：2026-10-10 00:55（北京时间，最近一次更新）
+> 记录时间：2026-10-10 12:10（北京时间，最近一次更新）
 > 仓库：`https://github.com/River-1024/GlacierBMS-iOS`（私有）
 > 工作流：`.github/workflows/build.yml`
 > 说明：本机（Windows）无 Swift/Xcode，iOS 编译与测试全部在 GitHub-hosted macOS runner 上执行。
@@ -8,7 +8,13 @@
 
 ## 1. 结论
 
-**最近一次更新（2026-10-10 00:55）：** 项目更名为 `ANTuRide`（显示名「安途」）并加入 App 图标后，运行 `37961690423`（提交 `2e77a27`）在 Xcode 26.3 / iOS 26.2 SDK 上全绿，并首次通过新增的 `Verify app bundle contents` 断言步骤：`Assets.car`（946264 字节）与 `PrivacyInfo.xcprivacy`（397 字节）均在包内，`CFBundleIconName = AppIcon`、`CFBundleIdentifier = com.zjsf.anturide`、`CFBundleDisplayName = 安途`。该步骤同时修复了一个此前未被发现的缺陷——旧的 target 级 `resources:` 键不生效，导致资源与隐私清单从未进包（详见 `docs/PRIVACY_AUDIT.md` 第 7.1 节）。
+**最近一次更新（2026-10-10 12:10）：** 新增日志系统（`Sources/Services/Logging/` 7 文件）与设置页日志管理 UI 后，运行 `38022252771`（提交 `4ab1c9b`）在 Xcode 26.3 / iOS 26.2 SDK 上全绿（10m4s），全部 12 个步骤成功，产物 1292490 字节、SHA-256 `eade32c5311d6ce0c569ca034c3ec7e38838a4a7d739dc8bf24fff1079c5718c`。
+
+本轮共经 4 次迭代修复（详见第 4 节），暴露并解决了 4 类此前未触发的构建缺陷：SwiftPM 与 Xcode 测试目标共享目录导致的模块可见性冲突、public 类型引用 internal 类型、废弃的通知常量名、测试方法与 `XCTestCase` 属性同名。
+
+测试基线：`swift test` 执行 **12 例全通过**；iOS 模拟器 `xcodebuild test` 执行 **22 例 + 1 例 UI 测试全通过，0 失败**（含新增日志层 `LogLevelTests` 5 例、`LogEntryTests` 5 例）。
+
+包内资源核验：`Assets.car`（946264 字节）、`PrivacyInfo.xcprivacy`（397 字节）、`AppIcon60x60@2x.png`（19248 字节）均在；app 自身 `Info.plist` 的 `CFBundleDisplayName = 安途`、`CFBundleIdentifier = com.zjsf.anturide`、`CFBundleIconName = AppIcon`、`UILaunchScreen = {}`、蓝牙与定位用途说明齐全；`CFBundleIcons` 已生成。主二进制（1206688 字节）中日志系统 10 个类型符号全部存在。
 
 工作流已稳定通过。阶段 1 收尾提交 `f1d125e` 对应的运行 `37955477377` 成功完成以下四件事：
 
@@ -32,12 +38,30 @@
 
 | Run ID | 提交 | 结论 | 说明 |
 |---|---|---|---|
+| 38022252771 | `4ab1c9b` | 成功 | 日志系统 + 设置页日志 UI 全量验证；22+1 例模拟器测试、12 例 SwiftPM 测试全通过；产物 1292490 字节 |
+| 38022065769 | `1ad726e` | 失败 | 通知常量旧式命名（`UIApplicationDidEnterBackgroundNotification`）编译失败 |
+| 38021922182 | `7fcf343` | 失败 | `LogStore` public init 引用 internal `LogFileWriter`，可见性冲突 |
+| 38021758433 | `fd39983` | 失败 | `Tests/UnitTests` 同时被 SwiftPM 与 Xcode 测试目标编译，`import ANTuRide` 在 `swift test` 下报 no such module |
+| 38021637086 | `cbd9430` | 失败 | 日志系统首次提交，暴露上述测试目录共享问题 |
 | 37961690423 | `2e77a27` | 成功 | 资源打包修复（`sources` + `buildPhase: resources`）；新增资源断言通过；产物 1174236 字节 |
 | 37960334513 | `a5ca7f8` | 成功 | 更名 `ANTuRide` 与新增 App 图标后首次构建；核验发现 `Assets.car` / `PrivacyInfo.xcprivacy` 缺失 |
 | 37955477377 | `f1d125e` | 成功 | 阶段 1 + Liquid Glass 全量验证，Xcode 26.3 / iOS 26.2 SDK |
 | 37955009497 | `a727064` | 失败 | 视图引用领域类型缺少 `import ANTuRideDomain` |
 | 37954671402 | `697d003` | 失败 | `0x11` 功率偏移测试修正前（功率实际在 @106） |
 | 37954407098 | `e4be94d` | 失败 | 阶段 1 首轮（功率偏移与 domain 导入问题暴露） |
+
+## 4. 日志系统迭代记录（2026-10-10）
+
+本轮 4 次失败均为**首次触发的构建约束**，非逻辑缺陷，逐条记录以备后续复用：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | `no such module 'ANTuRide'` | `Package.swift` 将 `Tests/UnitTests` 声明为 SwiftPM 的 `ANTuRideDomainTests` 路径，该目录所有文件被 `swift test` 编译，而 SwiftPM 看不到 app target | 新增 `Tests/AppTests` 承载依赖 app 模块的测试；`project.yml` 的 `ANTuRideTests` 声明两个 source |
+| 2 | `initializer cannot be declared public because its parameter uses an internal type` | `LogStore` 为 public，其 init 参数 `LogFileWriter` 为 internal | `LogStore` 降为 internal（仅模块内使用） |
+| 3 | `'UIApplicationDidEnterBackgroundNotification' has been renamed to ...` | 旧式全局通知常量在新 SDK 中已重命名，属硬错误 | 改用 `UIApplication.didEnterBackgroundNotification` / `.willTerminateNotification` |
+| 4 | `method 'testCaseCount()' conflicts with getter for 'testCaseCount' from superclass 'XCTest'` | 测试方法名与 `XCTestCase` 既有属性同名 | 重命名为 `testAllCasesCount` |
+
+**关键教训**：`Tests/UnitTests` 目录是 SwiftPM 与 Xcode 测试目标的共享区，只能放仅依赖 `ANTuRideDomain` 的测试；任何 `import ANTuRide` 的测试必须放在 `Tests/AppTests`。
 | 37949795350 | `15f4a79` | 成功 | 收尾提交，隐私审计与构建结果文档 |
 | 37946393492 | `1899dcc` | 成功 | 加入隐私清单 |
 | 37944659806 | `7741bcd` | 成功 | 记录隐私审计与构建服务文档 |
