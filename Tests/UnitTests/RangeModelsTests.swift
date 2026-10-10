@@ -77,7 +77,7 @@ final class RangeModelsTests: XCTestCase {
     }
 
     func testInvalidEffectiveCoefficientsAreRejectedNotClamped() {
-        for coefficient in [66.0.nextDown, 86.0.nextUp, 0, -1, .nan, .infinity, -.infinity] {
+        for coefficient in [Double(66.0).nextDown, Double(86.0).nextUp, 0, -1, .nan, .infinity, -.infinity] {
             let model = BasicRangePredictor(settings: settings, effectiveWhPerAh: coefficient)
             assertUnavailable(model.predict(
                 remainingAh: 50, netWh: 100, distanceMeters: 2_000
@@ -130,7 +130,7 @@ final class RangeModelsTests: XCTestCase {
     }
 
     func testInvalidRemainingAhIsRejectedNotClamped() {
-        for remainingAh in [-1.0, 100.0.nextUp, .nan, .infinity, -.infinity] {
+        for remainingAh in [-1.0, Double(100.0).nextUp, .nan, .infinity, -.infinity] {
             assertUnavailable(predictor.predict(
                 remainingAh: remainingAh, netWh: 100, distanceMeters: 2_000
             ), .capacityInvalid)

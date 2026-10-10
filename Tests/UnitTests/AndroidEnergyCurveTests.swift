@@ -111,11 +111,11 @@ final class AndroidEnergyCurveTests: XCTestCase {
         XCTAssertEqual(try energy(-0.0), 0)
         XCTAssertEqual(try energy(24), integerEnergyWh[24], accuracy: 1e-8)
         XCTAssertEqual(try energy(134), integerEnergyWh[134], accuracy: 1e-8)
-        for ah in [24.0.nextDown, 24.0.nextUp] {
+        for ah in [Double(24.0).nextDown, Double(24.0).nextUp] {
             XCTAssertEqual(try energy(ah), integerEnergyWh[24], accuracy: 1e-8)
         }
-        XCTAssertEqual(try energy(134.0.nextDown), integerEnergyWh[134], accuracy: 1e-8)
-        XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: 134.0.nextUp, capacityAh: 134))
+        XCTAssertEqual(try energy(Double(134.0).nextDown), integerEnergyWh[134], accuracy: 1e-8)
+        XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: Double(134.0).nextUp, capacityAh: 134))
     }
 
     func testCapacityToleranceSelects134CurveWithoutExtrapolatingOrRelaxingInputBounds() throws {
@@ -186,10 +186,10 @@ final class AndroidEnergyCurveTests: XCTestCase {
         for capacity in [Double.nan, .infinity, -.infinity, -1, -0.0, 0, 10_000.0.nextUp] {
             XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: 0, capacityAh: capacity))
         }
-        for ah in [Double.nan, .infinity, -.infinity, -1, -Double.leastNonzeroMagnitude, 134.0.nextUp] {
+        for ah in [Double.nan, .infinity, -.infinity, -1, -Double.leastNonzeroMagnitude, Double(134.0).nextUp] {
             XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: ah, capacityAh: 134))
         }
-        XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: 100.0.nextUp, capacityAh: 100))
+        XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: Double(100.0).nextUp, capacityAh: 100))
         XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: 10_000.0.nextUp, capacityAh: 10_000))
         XCTAssertNil(AndroidEnergyCurve.remainingEnergyWh(remainingAh: .nan, capacityAh: .nan))
     }
