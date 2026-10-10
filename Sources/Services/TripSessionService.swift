@@ -34,11 +34,14 @@ public final class TripSessionService: NSObject, ObservableObject {
     @Published public private(set) var liveSegments: [TripSegment] = []
     @Published public private(set) var savedTrips: [Trip] = []
     @Published public private(set) var lastError: String?
+    @Published public private(set) var historyError: String?
+    @Published public private(set) var pendingSaveTrip: Trip?
 
     private var recorder = TripRecorder()
     private var currentTripID: UUID?
     private var snapshotSubscription: AnyCancellable?
     private var lockObservers: [NSObjectProtocol] = []
+    private var currentPhase: TripSegmentKind = .foreground
 
     private let locationService: LocationService
     private let bmsService: BmsBluetoothService
@@ -49,7 +52,7 @@ public final class TripSessionService: NSObject, ObservableObject {
         self.bmsService = bmsService
         self.store = store
         super.init()
-        savedTrips = store.loadAll()
+        reloadHistory()
     }
 
     // MARK: - 行程控制
@@ -60,9 +63,14 @@ public final class TripSessionService: NSObject, ObservableObject {
             AppLog.location.info("忽略开始行程请求：当前状态 \(state)")
             return
         }
+        guard pendingSaveTrip == nil else {
+            lastError = "上一段行程尚未保存，请到行程页重试保存或导出。"
+            return
+        }
         recorder = TripRecorder()
         currentTripID = UUID()
-        recorder.start(at: Date(), kind: .foreground)
+        currentPhase = UIApplication.shared.applicationState == .background ? .background : .foreground
+        recorder.start(at: Date(), kind: currentPhase)
         state = .recording
         lastError = nil
 
@@ -97,35 +105,49 @@ public final class TripSessionService: NSObject, ObservableObject {
         let tripID = currentTripID ?? UUID()
         if let trip = recorder.finish(at: Date()) {
             let finished = Trip(id: tripID, startedAt: trip.startedAt, endedAt: trip.endedAt, segments: trip.segments)
-            persist(finished)
-            savedTrips = store.loadAll()
+            if !persist(finished) { pendingSaveTrip = finished }
         }
         teardownSession()
+        reloadHistory()
         AppLog.location.notice("行程结束 id=\(tripID.uuidString)")
     }
 
     // MARK: - 锁屏检测（D4：锁屏暂停，回前台恢复）
 
     private func observeLockState() {
+        guard let sessionID = currentTripID else { return }
         let center = NotificationCenter.default
-        lockObservers.append(
-            center.addObserver(
-                forName: .protectedDataDidBecomeUnavailable,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.handleDeviceLocked() }
+        lockObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard self?.currentTripID == sessionID else { return }
+                self?.updatePhase(.background)
             }
-        )
-        lockObservers.append(
-            center.addObserver(
-                forName: .protectedDataWillBecomeAvailable,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.handleDeviceUnlocked() }
+        })
+        lockObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard self?.currentTripID == sessionID else { return }
+                self?.updatePhase(.foreground)
+                self?.handleDeviceUnlocked()
             }
-        )
+        })
+        lockObservers.append(center.addObserver(forName: .protectedDataDidBecomeUnavailable, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard self?.currentTripID == sessionID else { return }
+                self?.handleDeviceLocked()
+            }
+        })
+        lockObservers.append(center.addObserver(forName: .protectedDataWillBecomeAvailable, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard self?.currentTripID == sessionID else { return }
+                self?.handleDeviceUnlocked()
+            }
+        })
+    }
+
+    private func updatePhase(_ phase: TripSegmentKind) {
+        currentPhase = phase
+        recorder.setPhase(phase, at: Date())
+        publishLive()
     }
 
     private func handleDeviceLocked() {
@@ -138,8 +160,10 @@ public final class TripSessionService: NSObject, ObservableObject {
     }
 
     private func handleDeviceUnlocked() {
-        guard state == .suspended else { return }
-        recorder.resume(at: Date())
+        guard state == .suspended, UIApplication.shared.isProtectedDataAvailable else { return }
+        let now = Date()
+        recorder.resume(at: now)
+        recorder.setPhase(currentPhase, at: now)
         state = .recording
         publishLive()
         AppLog.location.notice("设备解锁：行程采样恢复（原行程继续）")
@@ -147,18 +171,21 @@ public final class TripSessionService: NSObject, ObservableObject {
 
     // MARK: - 持久化
 
-    private func persist(_ trip: Trip) {
+    @discardableResult
+    private func persist(_ trip: Trip) -> Bool {
         do {
             try store.save(trip)
+            return true
         } catch {
             lastError = "行程保存失败：\(error.localizedDescription)"
             AppLog.location.error("行程保存失败：\(error.localizedDescription)")
+            return false
         }
     }
 
     private func persistLive() {
         guard let id = currentTripID, let startedAt = recorder.startedAt else { return }
-        let live = Trip(id: id, startedAt: startedAt, endedAt: Date(), segments: recorder.liveSegments)
+        let live = Trip(id: id, startedAt: startedAt, endedAt: nil, segments: recorder.liveSegments)
         persist(live)
     }
 
@@ -176,6 +203,35 @@ public final class TripSessionService: NSObject, ObservableObject {
         liveSegments = []
         currentTripID = nil
         state = .idle
+    }
+
+    /// 删除保存记录并刷新列表；禁止删除当前进行中的行程。
+    public func deleteTrip(id: UUID) {
+        guard id != currentTripID else { return }
+        do {
+            try store.delete(id: id)
+            reloadHistory()
+        } catch {
+            lastError = "行程删除失败：\(error.localizedDescription)"
+            AppLog.location.error("行程删除失败：\(id.uuidString)（\(error.localizedDescription)）")
+        }
+    }
+
+    public func reloadHistory() {
+        do {
+            savedTrips = try store.loadAll().filter { $0.id != currentTripID }
+            historyError = nil
+        } catch {
+            historyError = "行程读取失败：\(error.localizedDescription)"
+            AppLog.location.error("行程读取失败：\(error.localizedDescription)")
+        }
+    }
+
+    public func retryPendingSave() {
+        guard let trip = pendingSaveTrip, persist(trip) else { return }
+        pendingSaveTrip = nil
+        lastError = nil
+        reloadHistory()
     }
 
     // MARK: - 实时统计（供仪表盘直读）

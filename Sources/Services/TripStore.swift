@@ -29,12 +29,17 @@ public struct TripStore {
         AppLog.location.info("行程已保存：\(trip.id.uuidString)（\(data.count) 字节，\(trip.segments.count) 段）")
     }
 
-    func loadAll() -> [Trip] {
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        ))?.filter { $0.pathExtension == "json" } ?? []
+    func loadAll() throws -> [Trip] {
+        let files: [URL]
+        do {
+            files = try FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
+            ).filter { $0.pathExtension == "json" }
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError { return [] }
+            throw error
+        }
 
         let trips = files.compactMap { url -> Trip? in
             do {
@@ -48,15 +53,11 @@ public struct TripStore {
         return trips.sorted { $0.startedAt > $1.startedAt }
     }
 
-    func delete(id: UUID) {
+    func delete(id: UUID) throws {
         let url = Self.fileURL(for: id, in: directory)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
-        do {
-            try FileManager.default.removeItem(at: url)
-            AppLog.location.info("行程已删除：\(id.uuidString)")
-        } catch {
-            AppLog.location.error("行程删除失败：\(id.uuidString)（\(error.localizedDescription)）")
-        }
+        try FileManager.default.removeItem(at: url)
+        AppLog.location.info("行程已删除：\(id.uuidString)")
     }
 
     private static func fileURL(for id: UUID, in directory: URL) -> URL {

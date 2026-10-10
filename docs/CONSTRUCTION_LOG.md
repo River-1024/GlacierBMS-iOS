@@ -134,3 +134,12 @@
 - 修正：历史审计文档存在通用开发目录，当前去除；旧历史仍保留此目录（无个人用户名/凭据）。未擅自改写 Git 历史。App 分享数据可能含位置/UUID，PRIVACY.md 补充提醒。
 - 限制：旧 23 个 unsigned artifact 未逐包扫描；模式扫描不构成零风险保证。详细证据与公开边界见 PUBLIC_RELEASE_PRIVACY_AUDIT.md。
 - 下一步：仅将独立 iOS 仓库设为 PUBLIC，保留主干不合并，继续构建施工分支。
+
+## 步骤 014：公开完成与行程/控制器批次编译
+
+- 时间：2026-10-10 21:03:24 +0800。
+- 可见性：GitHub API 实查 isPrivate=false、visibility=PUBLIC；仅 River-1024/GlacierBMS-iOS 已公开，未修改父安卓项目。
+- 行程：逐点证据保存于 TripSegment.samples，旧 JSON optional兼容；四指标曲线、1/3/5/10分钟覆盖窗口、Services 重建保点，33项领域 XCTest待编译执行。净能耗明确沿用右端矩形积分，不将共同覆盖与总跨度混淆。
+- 控制器：FFE0/FF00按安卓候选顺序、write+notify/indicate特征、单请求在途、超时清空、前台全局轮询；独立历史JSON/CSV及21项 AppTests；无控制参数写入、无后台承诺、XLSX/18列导出仍缺。
+- 提交：只纳入已结束的行程/控制器与导航施工；首页完整槽位、驾驶设置、加速仍在并行修改，不能混入半成品提交。
+- 状态：公开后继续 workflow_dispatch 编译；新 Run 结果将单独记录。

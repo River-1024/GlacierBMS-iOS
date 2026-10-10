@@ -63,7 +63,13 @@ struct DeviceView: View {
                      : "当前列出附近全部蓝牙设备；打开后仅保留名称含 ant / apt 的设备，以及广播 FFE0 服务的设备。")
             }
 
-            Section("附近设备") {
+            Section("电机控制器") {
+                NavigationLink { ControllerView() } label: {
+                    Label("控制器连接、实时数据与历史", systemImage: "engine.combustion")
+                }
+            }
+
+            Section("附近 BMS 设备") {
                 if bms.discoveredDevices.isEmpty {
                     Text(bms.state == .scanning ? "正在扫描…" : "暂未发现设备，点击右上角扫描")
                         .foregroundStyle(.secondary)
@@ -127,7 +133,7 @@ struct DeviceView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if bms.connectedDeviceName == device.name, isSessionActive {
+            if bms.connectedDeviceID == device.id, isSessionActive {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppTheme.success)
             }

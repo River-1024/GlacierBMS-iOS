@@ -5,8 +5,13 @@ struct RootView: View {
         case dashboard
         case devices
         case detail
+        case trips
+        case range
         case settings
     }
+
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var controller: ControllerBluetoothService
 
     @State private var selection: Tab = .dashboard
 
@@ -21,10 +26,18 @@ struct RootView: View {
             BmsDetailView()
                 .tabItem { Label("详情", systemImage: "battery.100") }
                 .tag(Tab.detail)
+            TripHistoryView()
+                .tabItem { Label("行程", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
+                .tag(Tab.trips)
+            NavigationStack { RangeView() }
+                .tabItem { Label("续航", systemImage: "gauge.with.dots.needle.33percent") }
+                .tag(Tab.range)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(Tab.settings)
         }
+        .onAppear { controller.setPollingEnabled(scenePhase == .active) }
+        .onChange(of: scenePhase) { phase in controller.setPollingEnabled(phase == .active) }
     }
 }
 

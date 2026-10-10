@@ -10,7 +10,8 @@ import Foundation
 ///    始终是同一行程，不重复开始。
 ///
 /// 能耗配对规则：相邻两个 BMS 功率样本的时间差 ≤ `maxBmsSampleInterval`
-/// 才做 `功率 × Δt` 积分；首样本无前值、间隔超限（BLE 断开）一律跳过。
+/// 才做右端矩形 `本次功率 × Δt / 3600` 积分（非梯形）；
+/// 首样本无前值、间隔超限（BLE 断开）一律跳过。
 public struct TripRecorder: Sendable {
     public let maxLocationGap: TimeInterval
     public let maxBmsSampleInterval: TimeInterval
@@ -41,6 +42,7 @@ public struct TripRecorder: Sendable {
         var locationCount = 0
         var energySampleCount = 0
         var invalidLocationCount = 0
+        var samples: [TripSample] = []
 
         func closed(at end: Date) -> TripSegment {
             TripSegment(
@@ -51,7 +53,8 @@ public struct TripRecorder: Sendable {
                 energyWh: energyWh,
                 locationCount: locationCount,
                 energySampleCount: energySampleCount,
-                invalidLocationCount: invalidLocationCount
+                invalidLocationCount: invalidLocationCount,
+                samples: samples
             )
         }
     }
@@ -59,6 +62,8 @@ public struct TripRecorder: Sendable {
     private var openSegment: OpenSegment?
     private var lastFix: GpsFix?
     private var lastEnergyTime: Date?
+    private var lastLocationInputTime: Date?
+    private var lastBmsInputTime: Date?
     private var lastPhase: TripSegmentKind = .foreground
 
     public init(
@@ -90,6 +95,9 @@ public struct TripRecorder: Sendable {
         closeOpenSegment(at: date)
         lastPhase = kind
         openSegment = OpenSegment(kind: kind, startedAt: date)
+        // 不跨相位边界配对，避免缺口回溯到旧段并生成倒置/重叠区间。
+        lastFix = nil
+        lastEnergyTime = nil
     }
 
     /// 锁屏/用户暂停。暂停区间记为 `suspended` 段，持续到 `resume`。
@@ -126,82 +134,100 @@ public struct TripRecorder: Sendable {
 
     // MARK: - 采样输入
 
-    /// 摄入一次 GPS 定位。仅在 `recording` 状态处理。
-    ///
-    /// 规则：
-    /// - 无效定位（精度超限/坐标非法）计入 `invalidLocationCount`，不动里程；
-    /// - 与上一个有效定位的间隔 > `maxLocationGap` 时，在两者之间插入 `gap` 段，
-    ///   间隔期间的里程不予追溯（不插值）；
-    /// - 有效定位按球面距离累计（两端速度可信时优先用平均速度 × Δt）。
+    /// GPS 无效点仍保存有效性证据，并清除里程配对基准。
+    /// 倒序/重复输入不参与采样；长缺口不补算，也不把 BMS 配对带入新段。
     public mutating func ingestLocation(_ fix: GpsFix) {
-        guard state == .recording else { return }
-        guard var segment = openSegment else { return }
-
-        guard fix.isUsable(maxAccuracy: maxHorizontalAccuracy) else {
+        guard state == .recording, var segment = openSegment,
+              fix.timestamp.timeIntervalSinceReferenceDate.isFinite,
+              fix.timestamp >= segment.startedAt,
+              lastLocationInputTime.map({ fix.timestamp > $0 }) ?? true else { return }
+        // 转移段的数组所有权，避免每次 append 对长行程样本做整数组复制。
+        openSegment = nil
+        lastLocationInputTime = fix.timestamp
+        let valid = fix.isUsable(maxAccuracy: maxHorizontalAccuracy)
+        var interval: TimeInterval?
+        var distance: Double?
+        if !valid {
             segment.invalidLocationCount += 1
-            openSegment = segment
-            return
-        }
-
-        segment.locationCount += 1
-
-        if let previous = lastFix {
-            let dt = fix.timestamp.timeIntervalSince(previous.timestamp)
-            if dt > maxLocationGap {
-                // 长间隔：闭合当前段并插入缺口段，缺口期间不追溯里程。
-                segments.append(segment.closed(at: previous.timestamp))
-                segments.append(
-                    OpenSegment(kind: .gap, startedAt: previous.timestamp)
-                        .closed(at: fix.timestamp)
-                )
-                openSegment = OpenSegment(kind: lastPhase, startedAt: fix.timestamp)
-                lastFix = fix
-                return
-            }
-            if dt > 0 {
-                if previous.isSpeedValid && fix.isSpeedValid {
-                    let averageSpeed = (previous.speed + fix.speed) / 2
-                    segment.distanceMeters += max(0, averageSpeed * dt)
-                } else {
-                    segment.distanceMeters += max(0, haversineMeters(from: previous, to: fix))
-                }
-            }
-        }
-        lastFix = fix
-        openSegment = segment
-    }
-
-    /// 摄入一次 BMS 功率采样（瓦）。仅在 `recording` 状态处理。
-    ///
-    /// 配对规则：首样本只登记不积分；与上一有效样本间隔 > `maxBmsSampleInterval`
-    /// （BLE 断开/查询停摆）则重置配对基准，间隔期间的能耗记为缺口，不伪造。
-    public mutating func ingestPowerWatts(_ watts: Double, at date: Date) {
-        guard state == .recording else { return }
-        guard var segment = openSegment else { return }
-
-        if let previous = lastEnergyTime {
-            let dt = date.timeIntervalSince(previous)
-            if dt > 0 {
-                if dt <= maxBmsSampleInterval {
-                    segment.energyWh += watts * dt / 3600
-                    segment.energySampleCount += 1
-                    lastEnergyTime = date
-                } else {
-                    // 间隔超限：不补算，仅重置配对基准。
-                    lastEnergyTime = date
-                }
-            }
+            lastFix = nil
         } else {
-            lastEnergyTime = date
+            if let previous = lastFix {
+                let dt = fix.timestamp.timeIntervalSince(previous.timestamp)
+                if dt > maxLocationGap {
+                    // 不回溯覆盖已入段的异步 BMS 点；缺口从最后已记录事件开始。
+                    let boundary = max(previous.timestamp, segment.samples.map(\.timestamp).max() ?? segment.startedAt)
+                    if boundary <= fix.timestamp {
+                        segments.append(segment.closed(at: boundary))
+                        segments.append(OpenSegment(kind: .gap, startedAt: boundary).closed(at: fix.timestamp))
+                        segment = OpenSegment(kind: lastPhase, startedAt: fix.timestamp)
+                    }
+                    lastEnergyTime = nil
+                } else if dt > 0 {
+                    let meters = previous.isSpeedValid && fix.isSpeedValid
+                        ? (previous.speed / 2 + fix.speed / 2) * dt
+                        : haversineMeters(from: previous, to: fix)
+                    if meters.isFinite {
+                        interval = dt
+                        distance = max(0, meters)
+                        segment.distanceMeters += distance ?? 0
+                    }
+                }
+            }
+            segment.locationCount += 1
+            lastFix = fix
         }
+        segment.samples.append(TripSample(timestamp: fix.timestamp, gpsValid: valid,
+            latitude: finite(fix.latitude), longitude: finite(fix.longitude),
+            speedMetersPerSecond: valid && fix.isSpeedValid ? fix.speed : nil,
+            locationIntervalSeconds: interval, distanceMeters: distance))
         openSegment = segment
     }
 
-    /// 便捷入口：按 `BmsSnapshot.receivedAt` 摄入功率（快照的 `power` 可为 nil）。
-    public mutating func ingestSnapshot(_ snapshot: BmsSnapshot) {
-        guard let power = snapshot.power else { return }
-        ingestPowerWatts(power, at: snapshot.receivedAt)
+    /// 保留原功率入口；没有电压/电流时不借用旧快照填充。
+    public mutating func ingestPowerWatts(_ watts: Double, at date: Date) {
+        ingestBms(power: watts, voltage: nil, current: nil, at: date)
     }
+
+    /// 快照缺少/包含无效功率时保存无效事件并断开配对；电压电流只来自此快照。
+    public mutating func ingestSnapshot(_ snapshot: BmsSnapshot) {
+        ingestBms(power: snapshot.power, voltage: snapshot.totalVoltage,
+                  current: snapshot.current, at: snapshot.receivedAt)
+    }
+
+    private mutating func ingestBms(power: Double?, voltage: Double?, current: Double?, at date: Date) {
+        guard state == .recording, var segment = openSegment,
+              date.timeIntervalSinceReferenceDate.isFinite, date >= segment.startedAt,
+              lastBmsInputTime.map({ date > $0 }) ?? true else { return }
+        openSegment = nil
+        lastBmsInputTime = date
+        // bmsValid 表示此输入可作为能耗来源；不为缺失功率推导/沿用旧值。
+        let valid = (power.map { $0.isFinite } ?? false)
+            && (voltage.map { $0.isFinite && $0 > 0 } ?? true)
+            && (current.map { $0.isFinite } ?? true)
+        var interval: TimeInterval?
+        var energy: Double?
+        if valid, let watts = power {
+            if let previous = lastEnergyTime {
+                let dt = date.timeIntervalSince(previous)
+                let wh = watts * dt / 3600
+                if dt > 0, dt <= maxBmsSampleInterval, wh.isFinite {
+                    interval = dt
+                    energy = wh
+                    segment.energyWh += wh
+                    segment.energySampleCount += 1
+                }
+            }
+            lastEnergyTime = date
+        } else {
+            lastEnergyTime = nil
+        }
+        segment.samples.append(TripSample(timestamp: date, bmsValid: valid,
+            powerWatts: power.flatMap { finite($0) }, voltageVolts: voltage.flatMap { finite($0) },
+            currentAmps: current.flatMap { finite($0) }, energyIntervalSeconds: interval, energyWh: energy))
+        openSegment = segment
+    }
+
+    private func finite(_ value: Double) -> Double? { value.isFinite ? value : nil }
 
     // MARK: - 内部
 

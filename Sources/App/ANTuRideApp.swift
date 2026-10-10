@@ -8,6 +8,7 @@ struct ANTuRideApp: App {
     @StateObject private var locationService: LocationService
     @StateObject private var tripSession: TripSessionService
     @StateObject private var rangeService: RangeService
+    @StateObject private var controllerService = ControllerBluetoothService()
 
     init() {
         // 日志系统必须最先安装：后续所有启动逻辑都应留下痕迹。
@@ -59,6 +60,7 @@ struct ANTuRideApp: App {
                 .environmentObject(locationService)
                 .environmentObject(tripSession)
                 .environmentObject(rangeService)
+                .environmentObject(controllerService)
                 .preferredColorScheme(appModel.colorScheme)
         }
     }
