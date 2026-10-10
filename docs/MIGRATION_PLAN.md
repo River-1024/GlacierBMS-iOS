@@ -295,6 +295,40 @@ xcodebuild -project ANTuRide.xcodeproj \
 
 ## 11. 真机闪退根因分析（2026-10-10）
 
+### 11.0 第一轮真机日志取证结论（12:38 更新）——原假设被证据推翻
+
+**原始假设**：`AntProtocol.parseStatusResponse` 守卫漏算 `+2`，收到状态帧时越界 trap。
+
+**取证材料**：真机导出日志 `anturide-20261010-123246.log`（116 条，Debug 构建，等级阈值 debug）。
+
+**关键时间线**（两次连接，均在无任何用户操作下复现）：
+
+| 会话 | ready | 最后一条日志 | 重启检测到异常退出 |
+|---|---|---|---|
+| 第 1 次 | 12:27:26.638 | 12:27:26.793（收到 3 条 **0 字节**通知） | 12:27:28.850 |
+| 第 2 次 | 12:27:59.128 | 12:27:59.128（ready 本条，此后**零日志**） | 12:28:01.647 |
+
+**证据推出的五个事实**：
+
+1. **原假设被推翻**：两次会话均无任何「待解析帧 / 解析返回 nil / 解析成功」日志——解析器从未被调用（第 1 次收到的通知是 0 字节，凑不齐帧头；第 2 次一条通知都没有）。`AntProtocol` 不是本次崩溃的触发点。
+2. **设备未断连**：断连回调会打 WARNING「意外断开」（`BmsBluetoothService.swift:274`），日志中不存在。
+3. **周期查询在正常发送**：「跳过本次查询：canSendWriteWithoutResponse=false」为 DEBUG 级，若发生必然留痕；日志中不存在 → 每秒写入在静默成功执行。
+4. **崩溃与用户操作无关**：用户明确反馈连接后未触碰手机即闪退；ready 后约 2.2–2.5 秒死亡（含人工重开 App 的延迟，实际死亡点更早）。
+5. **运行环境为 iOS 27.2 Beta**（Build 24B5099f，日志头部 `系统: Version 27.2`）；App 在 iOS 26+ 启用 Liquid Glass（`AppTheme.swift` `glassEffect` / `.glassProminent`）。
+
+**应用层代码全量排除清单**（已逐一审查，无可崩溃点）：BLE 服务全路径（扫描/连接/发现/Notify/断连/重连/周期查询）、`BmsFrameAssembler`（空数据 `guard count >= 2` 直接 break）、`AntProtocol`（未执行）、`BmsFreshnessEvaluator`（纯函数）、四个页面全部视图代码（仪表盘 / 设备 / 详情 / 设置）、`BmsFormatters`（Double 运算）、`AppTheme`（glass 修饰器）。全仓 grep 无 `fatalError` / `precondition` / `as!` / `try!` / 强解包 / 整数除零。
+
+**剩余两个假设**（静态分析已穷尽，需崩溃报告裁决）：
+
+- **假设 A（倾向）**：iOS 27.2 Beta 的系统层崩溃——SwiftUI/Liquid Glass 渲染或 CoreBluetooth 内部，触发点为 ready 状态切换后的渲染事务或 `writeValue(.withoutResponse)` 调用。Beta 系统（小写 `f` build 后缀）+ 新材质 API 是已知高风险组合。
+- **假设 B（低概率）**：应用代码外的运行时问题（如日志高频 `Logger` 实例创建），但无证据支持。
+
+**下一步取证（不需要改代码）**：从 iPhone 导出系统崩溃报告——设置 → 隐私与安全性 → 分析与改进 → 分析数据 → 找 `ANTuRide-2026-10-10-*.ips`，其中 `exception type` 与崩溃线程栈帧可一锤定音。
+
+**原始假设的处置**：`AntProtocol` 守卫漏算 `+2` 仍是一个真实存在的潜在缺陷（静态推演成立，只是未被本次真机数据触发），修复方案保留，待崩溃真相水落石出后一并处理。
+
+### 11.1 原静态分析（第一轮，假设未获证实，留档）
+
 **结论：`AntProtocol.parseStatusResponse` 索引越界，非 UI 或连接逻辑问题。**
 
 - **现象**：真机连接 ANT BMS 成功后约 1 秒内闪退。
@@ -304,5 +338,5 @@ xcodebuild -project ANTuRide.xcodeproj \
 - **触发判据（可静态计算）**：帧满足 `count == offset + tc*2 + 12` 且 `count >= 100` 时守卫放行、真实读取越界。
 - **为何无日志可查**：Swift `Data` 下标越界触发 `fatalError`，是不可捕获 trap，`try/catch` 无效；且全仓无日志系统，崩溃前无任何上下文。
 - **修复方案（尚未实施）**：修正守卫常量覆盖到 `soc` 读取结束，并在 `current`/`soc` 读取前各加 `has()` 检查；补 fuzz 测试断言「永不 trap」。
-- **执行顺序**：先加日志取证（本次已完成）→ 真机复现取原始帧证据 → 再修越界 → 验证。
+- **执行顺序**：先加日志取证（本次已完成）→ 真机复现取原始帧证据（已完成，结论见 11.0）→ 系统崩溃报告裁决 → 再动刀。
 
