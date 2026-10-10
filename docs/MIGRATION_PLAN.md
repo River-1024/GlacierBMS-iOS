@@ -327,6 +327,33 @@ xcodebuild -project ANTuRide.xcodeproj \
 
 **原始假设的处置**：`AntProtocol` 守卫漏算 `+2` 仍是一个真实存在的潜在缺陷（静态推演成立，只是未被本次真机数据触发），修复方案保留，待崩溃真相水落石出后一并处理。
 
+### 11.0.1 崩溃报告裁决（12:50 更新）——真凶锁定：`BmsFrameAssembler.append`
+
+**取证材料**：三份系统崩溃报告 `ANTuRide-2026-10-10-1227{10,28,59}.ips`（bug_type 309，iOS 27.2 Beta 24B5099f，iPhone19,7）。
+
+**三份报告完全一致的崩溃签名**：
+
+| 项 | 值 |
+|---|---|
+| Exception Type | `EXC_BREAKPOINT (SIGTRAP)`——Swift 运行时 trap（越界/precondition 一类），非内存越权 |
+| 崩溃线程 | 主线程（`com.apple.main-thread`） |
+| 帧 0 | `ANTuRideDomain` `BmsFrameAssembler.append(_:)` **+4352**（三份偏移一致） |
+| 帧 1 | `ANTuRide` `closure #1 in BmsBluetoothService.peripheral(_:didUpdateValueFor:error:)` |
+| 帧 5 | `completeTaskWithClosure`（Task { @MainActor } 桥接） |
+| ANTuRideDomain UUID | `67722708-ce53-35dd-84d7-fabdf8527581` |
+
+**崩溃点即收到 BLE 通知后调用的合包器**，与 11.0 的时间线完全吻合，并解开两个疑点：
+
+1. **导出日志崩溃前空白的原因**：`收到原始通知` 的 DEBUG 行走异步写盘队列，trap 在落盘前发生，最后一行永远丢失。真实顺序：通知到达 → 日志入队 → `append` trap。
+2. **「没收到通知也崩」的假象**：第三份报告 `procLaunch 12:27:28.83` 对应日志 12:27:28.850 的重启；其崩溃 capture 12:27:59.2869，即 ready（59.128）后仅 **160ms**——通知确实到了（栈帧 1 证明），只是日志没来得及写盘。
+
+**`append` 静态核查结论**：源码中每个下标均有前置守卫（`count>=2`→`buffer[0]/[1]`、`count>=6`→`buffer[5]`、`count>=frameLength`→`candidate[frameLength-2/-1]`），且 `buffer` 恒为 0 基 `Data`（所有再赋值均经 `Data(...)` 重定基）。可见逻辑推演不出越界路径。trap 偏移 +4352 深入函数体，落在 `Data` 下标 / `firstIndex(of:)` 等泛型内联展开区。结合 **iOS 27.2 Beta（build 后缀 `f`）**，两个可能：
+
+- **假设 A（倾向）**：iOS 27.2 Beta 的 Foundation/stdlib `Data` 切片或 Collection 算法回归，在特定输入（如 0 字节通知后紧跟分片）触发。
+- **假设 B**：我们未推演到的输入形态触发了某个内联守卫（无法在 Windows 侧复现验证）。
+
+**修复方向（对 A/B 均有效，待批准后实施）**：重写 `BmsFrameAssembler.append`——入口先把 `Data` 转为 `[UInt8]`，用显式整数下标与自管 `pos` 指针实现扫描，**不用 Data 切片、不用 Collection 泛型算法**；每个读取点显式判界，任何异常形态一律丢弃缓冲并返回已产出帧（防御性 total 函数）。同步补 fuzz 测试（随机字节流 + 0 字节块注入）断言「永不 trap、产出帧必以 `7E A1` 开头 `AA 55` 结尾」。附带修复 `AntProtocol` §11.1 的守卫缺陷（同属越界类）。
+
 ### 11.1 原静态分析（第一轮，假设未获证实，留档）
 
 **结论：`AntProtocol.parseStatusResponse` 索引越界，非 UI 或连接逻辑问题。**
