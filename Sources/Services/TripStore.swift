@@ -5,11 +5,14 @@ import Foundation
 ///
 /// 不用 Documents（避免暴露给「文件」App 被误删），也不用 Caches
 /// （可能被系统清理）；与日志存储目录策略一致。
-struct TripStore {
-    let directory: URL
+///
+/// - Note: 类型与 `init` 必须 public——`TripSessionService.init` 的
+///   默认参数引用了本类型（Swift 可见性规则，CI 已踩过一次）。
+public struct TripStore {
+    public let directory: URL
 
     /// - Parameter directory: 注入自定义目录仅用于测试；默认 Application Support/Trips。
-    init(directory: URL? = nil) {
+    public init(directory: URL? = nil) {
         if let directory {
             self.directory = directory
         } else {
