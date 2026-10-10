@@ -143,3 +143,10 @@
 - 控制器：FFE0/FF00按安卓候选顺序、write+notify/indicate特征、单请求在途、超时清空、前台全局轮询；独立历史JSON/CSV及21项 AppTests；无控制参数写入、无后台承诺、XLSX/18列导出仍缺。
 - 提交：只纳入已结束的行程/控制器与导航施工；首页完整槽位、驾驶设置、加速仍在并行修改，不能混入半成品提交。
 - 状态：公开后继续 workflow_dispatch 编译；新 Run 结果将单独记录。
+
+## 步骤 015：公开后 CI 的重复扩展编译纠错
+
+- 时间：2026-10-10 21:06:31 +0800。
+- cf2a5eb / Run 38054275235：SwiftPM通过，但 iOS模块编译报 RangePredictionStatus.localizedName 重复声明，模拟器测试取消，未生成本批 IPA。
+- 根因：TripFormatters 与 RangeService 各声明同一扩展成员，属于跨批次集成问题，静态语法解析无法证明无重复定义。
+- 修复：删除 TripFormatters 中无关的重复续航扩展，保留 RangeService 单一实现，行程格式接口不变；重新提交编译。

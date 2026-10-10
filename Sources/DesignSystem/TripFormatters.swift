@@ -38,20 +38,3 @@ enum TripFormatters {
         }
     }
 }
-
-
-extension RangePredictionStatus {
-    var localizedName: String {
-        switch self {
-        case .valid: return "正常"
-        case .telemetryStale: return "采样过期"
-        case .noValidIntervals: return "定位数据不足"
-        case .charging: return "充电中"
-        case .capacityInvalid: return "容量异常"
-        case .undervoltage: return "欠压"
-        case .disconnected: return "设备未连接"
-        case .nonPositiveNetEnergy: return "净耗电不足"
-        case .accumulating: return "积累中"
-        }
-    }
-}
