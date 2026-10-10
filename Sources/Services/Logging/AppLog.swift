@@ -102,6 +102,8 @@ public final class AppLog: @unchecked Sendable {
     public static var ui: CategoryLogger { CategoryLogger(category: "ui") }
     /// 应用生命周期。
     public static var lifecycle: CategoryLogger { CategoryLogger(category: "lifecycle") }
+    /// GPS 定位链路。
+    public static var location: CategoryLogger { CategoryLogger(category: "location") }
 
     static let subsystem = "com.zjsf.anturide"
 
