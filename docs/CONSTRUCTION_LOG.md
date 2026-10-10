@@ -118,3 +118,19 @@
 - 真实错误：测试中的 24.0.nextDown、66.0.nextDown 等数字字面量成员访问触发 expected named member of numeric literal。
 - 修复：两处测试文件统一为 Double(...).nextDown/nextUp；保留原浮点边界测试含义。
 - 验证：暂存差异空白检查后提交并再次触发同分支 CI；结果另步记录。
+
+## 步骤 012：续航批次 GitHub CI 闭环与控制器导航接线
+
+- 时间：2026-10-10 20:58:05 +0800。
+- CI：8315235 / Run 38053408454 全绿；SwiftPM 测试、iOS 模拟器测试、Release 未签名设备构建、资源/隐私包核验和 IPA 上传成功。仅证明该提交，不涵盖后续未提交施工。
+- 产物：ANTuRide-unsigned-ipa，GitHub artifact ID 11670023061；本地归档 build/ci/8315235，未签名不能直接作为正常签名安装包。
+- 后续接线：App 注入独立 ControllerBluetoothService；Root 按 scenePhase 管理前台只读轮询，控制器页面不关闭首页/加速共享会话；设备/设置增加控制器导航入口。设备选择状态用 UUID 而非重名名称判断。
+- 状态：续航提交编译通过；新控制器/首页/行程/加速批次待单独 CI，真机验收未做。
+
+## 步骤 013：按用户要求进行仓库公开前审计
+
+- 时间：2026-10-10 21:02:49 +0800。
+- 结果：158 个历史 blob + 当前源码/测试/文档、41 个 Actions 日志未发现真实凭据；Git author 为 noreply；无 Issue/Release/Wiki/Pages。本轮未签名 IPA 解包无签名材料或现场数据。
+- 修正：历史审计文档存在通用开发目录，当前去除；旧历史仍保留此目录（无个人用户名/凭据）。未擅自改写 Git 历史。App 分享数据可能含位置/UUID，PRIVACY.md 补充提醒。
+- 限制：旧 23 个 unsigned artifact 未逐包扫描；模式扫描不构成零风险保证。详细证据与公开边界见 PUBLIC_RELEASE_PRIVACY_AUDIT.md。
+- 下一步：仅将独立 iOS 仓库设为 PUBLIC，保留主干不合并，继续构建施工分支。

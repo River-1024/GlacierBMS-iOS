@@ -1,7 +1,7 @@
 # ANTuRide iOS 隐私与凭据审计记录
 
 > 审计时间：2026-10-09 23:10（北京时间）
-> 审计对象：`D:\daima\bms\GPS_ANT_BMS\iOS`（独立仓库 `GlacierBMS-iOS`）
+> 审计对象：独立 iOS 工程目录（独立仓库 `GlacierBMS-iOS`）
 > 审计范围：仓库全部已跟踪文件与工作树内容
 > 审计目的：确认新仓库不包含凭据、真实设备数据、个人轨迹或媒体文件，且不引用旧 iOS 项目。
 
@@ -138,3 +138,7 @@ grep -rn -E "Glacier|冰川|glacier" . --exclude-dir=.git --exclude-dir=.workbud
 ```
 
 结果：仅剩 5 处上述仓库地址引用，无其他残留。
+
+## 公开前复核更新
+
+2026-10-10 已扩大检查至 Git 历史、工作树、Actions 日志与本轮 IPA。原文“不含本机路径”的绝对结论不准确：该文档曾记录通用开发目录，无个人用户名。当前移除目录，不擅自重写历史；详见 PUBLIC_RELEASE_PRIVACY_AUDIT.md。
