@@ -71,10 +71,13 @@ targets:
     platform: iOS
     deploymentTarget: "16.0"
     sources:
+      # Tests/UnitTests 同时被 SwiftPM（Package.swift 的 ANTuRideDomainTests）编译，
+      # 因此该目录只能放只依赖 ANTuRideDomain 的测试。
       - path: Tests/UnitTests
+      # Tests/AppTests 仅由 Xcode 测试 target 编译，可 import App 模块（ANTuRide）。
+      - path: Tests/AppTests
     dependencies:
       - target: ANTuRideDomain
-      # 日志层（LogLevel/LogEntry 等纯值类型）位于 app target，需一并链接才能单测。
       - target: ANTuRide
     settings:
       base:
