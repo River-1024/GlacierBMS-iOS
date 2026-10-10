@@ -1,7 +1,7 @@
 # 安途（ANTuRide）原生 iOS 首版总体规划与施工进度
 
-> 更新时间：2026-10-10 12:10（北京时间）  
-> 状态：阶段 1 代码完成；项目更名 `ANTuRide`（安途）已落地，全屏适配、液态玻璃、设备页过滤开关与 App 图标均已确认正常；**真机连接 BMS 后闪退已定位根因（解析器越界），日志系统已落地并通过 CI（Run `38022252771`），待真机取证**  
+> 更新时间：2026-10-10 15:05（北京时间）  
+> 状态：阶段 1 真机验收通过；**阶段 2 G1（领域层）+ G2（采集/会话服务层）已完成并通过 CI（Run `38034738345`，39 例 0 失败）**，待真机验收 GPS/行程链路；G3（行程列表/详情 UI）未开始  
 > 目标：使用 SwiftUI + CoreBluetooth 建立一款可由个人签名安装的原生 iOS 驾驶仪表盘。
 
 ## 1. 已确认产品决策
@@ -174,9 +174,11 @@
 - [x] 2026-10-10 新增**日志系统**（本次交付）：`Sources/Services/Logging/` 7 个文件——`LogLevel`（六级：debug/info/notice/warning/error/fault，可比较、可解析）、`LogEntry`（单行序列化 + 往返解析）、`LogFileWriter`（滚动落盘，2MB × 5 文件 ≈ 10MB 上限，每条 `synchronize` 保证崩溃前落盘）、`AppLog`（`os.Logger` 系统日志 + 沙盒文件**双写**门面，带分类入口 ble/protocolParser/ui/lifecycle）、`AppLogBootstrap`（启动安装 + 异常退出标记）、`LogHexDump`（原始帧十六进制转储）、`LogStore`（读取/过滤/导出/清除管理层）。设置页新增「运行日志」入口，支持**查看（等级着色 + 筛选）/ 导出下载 / 复制 / 清空（二次确认）/ 运行时记录阈值调整**。BLE 链路 30 处埋点覆盖扫描、连接、服务发现、Notify、原始帧转储、合包产出、解析成功/失败与全部状态迁移。
 - [x] 2026-10-10 日志系统 CI 验证通过：经 4 次迭代修复后，Run `38022252771`（`4ab1c9b`）全绿（10m4s）。修复项：① `Tests/UnitTests` 被 SwiftPM 与 Xcode 测试目标共享导致 `import ANTuRide` 失败 → 新增 `Tests/AppTests` 目录隔离；② `LogStore` public 引用 internal `LogFileWriter` → 降为 internal；③ 废弃通知常量名 → 改用 `UIApplication.didEnterBackgroundNotification`；④ 测试方法与 `XCTestCase.testCaseCount` 同名 → 改名。测试基线：SwiftPM 12 例、模拟器 22+1 例全通过、0 失败。产物 1292490 字节、SHA-256 `eade32c5311d6ce0c569ca034c3ec7e38838a4a7d739dc8bf24fff1079c5718c`；包内日志系统 10 个类型符号齐全。详见 `docs/CI_BUILD_RESULTS.md` 第 4 节。
 - [x] 2026-10-10 阶段 1 真机验收通过（14:14）：连接不再闪退、SOC/电压等数据正常显示（见 §11.2.5）。
-- [x] 2026-10-10 阶段 2 G1 领域层施工完成（见 §4 阶段 2 施工记录）：行程模型 + 记录器状态机 + 10 例单测 + Python 8 场景模拟预验证。
-- [ ] 阶段 2 G1 待 CI 编译与 SwiftPM 测试验证（Windows 无法执行 Swift）。
-- [ ] 阶段 2 G2（LocationService 采集层 + 行程会话状态机接线）、G3（行程列表/详情 UI）未开始。
+- [x] 2026-10-10 阶段 2 G1 领域层施工完成（见 §4 阶段 2 施工记录）：行程模型 + 记录器状态机 + 单测 + Python 8 场景模拟预验证；CI Run `38032277501` 全绿。
+- [x] 2026-10-10 阶段 2 G2 采集/会话服务层施工完成：`LocationService`（WhenInUse + 后台定位更新，automotiveNavigation，禁自动暂停）、`TripSessionService`（定位+BMS 快照接入记录器；锁屏经 protectedData 通知显式 suspend/resume；暂停/结束即落盘）、`TripStore`（Application Support/Trips JSON 持久化）、领域模型补 Codable + `liveSegments` 实时视图、AppLog 新增 location 分类；仪表盘接入实时 GPS 速度（km/h + 精度）与行程控制卡（开始/结束/实时里程能耗/暂停徽标）；`project.yml` 增 `UIBackgroundModes: [location]`。提交 `f4e331b`/`4fe3b99`/`4092171` + 3 个修复（`953c52b` TripStore 可见性、`cd9d89b` 锁屏通知常量与 skipsHiddenFiles 拼写、`26e86f8` FormatStyle 插值）。
+- [x] 2026-10-10 阶段 2 G2 CI 验证通过：Run `38034738345` 全绿，模拟器 39 例 0 失败（含 TripRecorderTests 12 例）；IPA 归档 `build/ci/26e86f8/ANTuRide-unsigned.ipa`（1371090 字节）。
+- [ ] 阶段 2 真机验收未开始：授权弹窗、GPS 速度显示、开始/结束行程、切后台继续记录、锁屏暂停成段、解锁恢复、行程文件落盘核验。
+- [ ] 阶段 2 G3（行程列表/详情页 UI）未开始。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
 ## 5.1 阶段 0 当前施工清单

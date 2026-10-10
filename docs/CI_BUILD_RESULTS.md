@@ -40,6 +40,12 @@
 
 | Run ID | 提交 | 结论 | 说明 |
 |---|---|---|---|
+| 38034738345 | `26e86f8` | 成功 | 阶段 2 G2 全量验证（定位/会话/持久化/仪表盘行程控制）；模拟器 39 例 0 失败；产物 1371090 字节，归档 `build/ci/26e86f8/` |
+| 38034546734 | `cd9d89b` | 失败 | `UIApplication.protectedData*Notification` 无 Swift 成员（改自建 NSNotification.Name）；`skidHiddenFiles` 误拼 |
+| 38034293526 | `953c52b` | 失败 | `TripStore` internal 被 public init 默认参数引用（可见性冲突，错误台账第 2 类坑复发） |
+| 38033655465 | `4092171` | 失败 | 同上可见性冲突首次暴露 |
+| 38032277501 | `762368b` | 成功 | 阶段 2 G1 里程语义修正后全绿；IPA 归档 `build/ci/762368b/`（1310748 字节） |
+| 38031999208 | `2388029` | 失败 | TripRecorderTests 3 例失败：测试误按纯 haversine 断言（实现为速度积分优先） |
 | 38029185052 | `bd63793` | 成功 | 合包器头尾界定修复（fix/test/docs 三提交）；产物 1290506 字节，归档 `build/ci/bd63793/`；真机验收通过：数据正常显示 |
 | 38026505099 | `ae7d0b7` | 成功 | 合包器重写（防 iOS 27.2 Beta trap）+ fuzz 测试；产物 1290454 字节，归档 `build/ci/ae7d0b7/`；真机验证不再闪退 |
 | 38022973698 | `b32508a` | 成功 | 文档提交连带验证；产物 1292490 字节（与 `4ab1c9b` 同尺寸） |
@@ -75,6 +81,18 @@
 | 4 | `method 'testCaseCount()' conflicts with getter for 'testCaseCount' from superclass 'XCTest'` | 测试方法名与 `XCTestCase` 既有属性同名 | 重命名为 `testAllCasesCount` |
 
 **关键教训**：`Tests/UnitTests` 目录是 SwiftPM 与 Xcode 测试目标的共享区，只能放仅依赖 `ANTuRideDomain` 的测试；任何 `import ANTuRide` 的测试必须放在 `Tests/AppTests`。
+
+## 4.1 阶段 2 迭代记录（2026-10-10 下午）
+
+本轮 G1+G2 共 6 次运行（2 次因测试预期错误、3 次因编译约束，最后全绿），新增教训：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | TripRecorderTests 3 例失败 | 测试误按纯 haversine 断言里程；实现语义为「速度可信时平均速度×Δt 优先」（正确） | 测试改用 `speed: -1` 走 haversine 路径；补速度积分断言 |
+| 2 | `initializer cannot be declared public...` | `TripSessionService.init` 默认参数引用 internal `TripStore`（与第 4 节 #2 同类坑复发） | `TripStore` 类型与 init 提升为 public |
+| 3 | `Type 'UIApplication' has no member 'protectedDataDidBecomeUnavailableNotification'` | 锁屏通知在 iOS 26.2 SDK 无该 Swift 成员（通知常量坑变种） | 用文档化常量字符串自建 `NSNotification.Name` |
+| 4 | `no member 'skidHiddenFiles'` | 拼写错误 | `.skipsHiddenFiles` |
+| 5 | `extra argument 'format' in call` | FormatStyle 插值（`.number(precision:)`）在普通 String autoclosure 中不可用且 API 形态错误 | 改 `String(format:)` |
 
 ## 5. CI 产物
 
