@@ -99,7 +99,10 @@ extension LocationService: CLLocationManagerDelegate {
                 let fix = self.convert(location)
                 self.lastFix = fix
                 AppLog.location.debug(
-                    "定位：v=\(String(format: "%.1f", fix.speed))m/s acc=\(String(format: "%.0f", fix.horizontalAccuracy))m (\(fix.latitude, format: .number(precision: 5)), \(fix.longitude, format: .number(precision: 5)))"
+                    String(
+                        format: "定位：v=%.1fm/s acc=%.0fm (%.5f, %.5f)",
+                        fix.speed, fix.horizontalAccuracy, fix.latitude, fix.longitude
+                    )
                 )
                 self.onFix?(fix)
             }
