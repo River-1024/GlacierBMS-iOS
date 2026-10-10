@@ -74,6 +74,8 @@ targets:
       - path: Tests/UnitTests
     dependencies:
       - target: ANTuRideDomain
+      # 日志层（LogLevel/LogEntry 等纯值类型）位于 app target，需一并链接才能单测。
+      - target: ANTuRide
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide.tests
