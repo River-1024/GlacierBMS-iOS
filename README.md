@@ -18,6 +18,22 @@ swift test
 
 在 macOS/Xcode 上进行个人签名安装时，选择个人 Team。不要把签名材料、Team ID 或描述文件提交到仓库。
 
+### 取回构建产物
+
+CI 每次成功运行都会产出无签名 IPA。用脚本一键拉回本地产出目录：
+
+```bash
+scripts/fetch-ipa.sh                 # 取最近一次成功的运行
+scripts/fetch-ipa.sh -r <Run ID>     # 取指定运行
+```
+
+归档结构（`build/` 已在 `.gitignore` 内，不会误提交）：
+
+```
+build/ci/<短提交号>/ANTuRide-unsigned.ipa
+build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
+```
+
 ## 当前施工阶段
 
 阶段 0：SwiftUI App 壳、协议解析、分片合包、BMS 模型、CoreBluetooth 服务骨架和测试。
