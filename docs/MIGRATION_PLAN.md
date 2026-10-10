@@ -94,6 +94,8 @@
 
 ### 阶段 2：GPS、行程和后台未锁屏记录
 
+> 2026-10-10 G1 施工记录：领域层已落盘——`Sources/Domain/Trip/TripModels.swift`（`GpsFix` / `TripSegmentKind` 四类区间标记 / `TripSegment` / `TripState` / `Trip`）与 `Sources/Domain/Trip/TripRecorder.swift`（行程记录器状态机：start/setPhase/suspend/resume/finish + GPS 定位摄入 + BMS 功率配对积分）。三条验收红线在领域层落死：暂停显式成 `suspended` 段；GPS 无效计 `invalidLocationCount`、长间隔插 `gap` 段且不追溯里程、BMS 采样间隔 >5s 重置配对基准不补算能耗；前后台切换为同行程段边界。单测 `Tests/UnitTests/TripRecorderTests.swift` 10 例；Windows 侧 Python 逐字节移植 8 场景模拟全过（前台里程、无效定位、缺口段、前后台、暂停恢复、能耗配对、断开不补算、状态机守卫）。待 CI 编译验证；G2（LocationService + 会话接线）、G3（行程 UI）未开始。
+
 目标：把手机定位和 BMS 数据纳入本地行程。
 
 交付：
@@ -171,8 +173,10 @@
 - [x] 2026-10-10 真机闪退根因定位（静态推演，未改代码）：真机连接 ANT BMS 成功后 1 秒内闪退。根因是 `AntProtocol.parseStatusResponse` 的**索引越界**——第 41 行守卫 `has(offset, temperatureCount * 2 + 4 + 2 + 2 + 2)` 漏算后续 `soc = u16(offset)` 的 `+2`，当帧长度恰为 `offset + tc*2 + 12` 且 ≥100 时守卫放行但真实读取越界；Swift `Data` 越界触发 `fatalError`，`try/catch` 无法捕获，故表现为无日志直接闪退。触发点在 `didUpdateValueFor` 通知回调（`BmsBluetoothService.swift`）。同时确认全仓**无任何日志系统**（`os_log`/`Logger`/`print` 零命中），崩溃现场无证据可查。
 - [x] 2026-10-10 新增**日志系统**（本次交付）：`Sources/Services/Logging/` 7 个文件——`LogLevel`（六级：debug/info/notice/warning/error/fault，可比较、可解析）、`LogEntry`（单行序列化 + 往返解析）、`LogFileWriter`（滚动落盘，2MB × 5 文件 ≈ 10MB 上限，每条 `synchronize` 保证崩溃前落盘）、`AppLog`（`os.Logger` 系统日志 + 沙盒文件**双写**门面，带分类入口 ble/protocolParser/ui/lifecycle）、`AppLogBootstrap`（启动安装 + 异常退出标记）、`LogHexDump`（原始帧十六进制转储）、`LogStore`（读取/过滤/导出/清除管理层）。设置页新增「运行日志」入口，支持**查看（等级着色 + 筛选）/ 导出下载 / 复制 / 清空（二次确认）/ 运行时记录阈值调整**。BLE 链路 30 处埋点覆盖扫描、连接、服务发现、Notify、原始帧转储、合包产出、解析成功/失败与全部状态迁移。
 - [x] 2026-10-10 日志系统 CI 验证通过：经 4 次迭代修复后，Run `38022252771`（`4ab1c9b`）全绿（10m4s）。修复项：① `Tests/UnitTests` 被 SwiftPM 与 Xcode 测试目标共享导致 `import ANTuRide` 失败 → 新增 `Tests/AppTests` 目录隔离；② `LogStore` public 引用 internal `LogFileWriter` → 降为 internal；③ 废弃通知常量名 → 改用 `UIApplication.didEnterBackgroundNotification`；④ 测试方法与 `XCTestCase.testCaseCount` 同名 → 改名。测试基线：SwiftPM 12 例、模拟器 22+1 例全通过、0 失败。产物 1292490 字节、SHA-256 `eade32c5311d6ce0c569ca034c3ec7e38838a4a7d739dc8bf24fff1079c5718c`；包内日志系统 10 个类型符号齐全。详见 `docs/CI_BUILD_RESULTS.md` 第 4 节。
-- [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
-- [ ] 阶段 1 解析器越界修复**未实施**（本次只加日志取证，不改协议逻辑，遵循「先取证后动刀」）。
+- [x] 2026-10-10 阶段 1 真机验收通过（14:14）：连接不再闪退、SOC/电压等数据正常显示（见 §11.2.5）。
+- [x] 2026-10-10 阶段 2 G1 领域层施工完成（见 §4 阶段 2 施工记录）：行程模型 + 记录器状态机 + 10 例单测 + Python 8 场景模拟预验证。
+- [ ] 阶段 2 G1 待 CI 编译与 SwiftPM 测试验证（Windows 无法执行 Swift）。
+- [ ] 阶段 2 G2（LocationService 采集层 + 行程会话状态机接线）、G3（行程列表/详情 UI）未开始。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
 ## 5.1 阶段 0 当前施工清单
