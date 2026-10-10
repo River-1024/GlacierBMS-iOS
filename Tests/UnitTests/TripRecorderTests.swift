@@ -195,6 +195,21 @@ final class TripRecorderTests: XCTestCase {
         XCTAssertEqual(trip.segments[2].endedAt, t0.addingTimeInterval(6))
     }
 
+    /// 实时段视图：闭合段 + 进行中段快照。
+    func testLiveSegmentsIncludesOpenSegment() throws {
+        var recorder = TripRecorder()
+        recorder.start(at: t0)
+        recorder.ingestLocation(fix(0, speed: -1))
+        recorder.ingestLocation(fix(1, lat: 30.001, speed: -1))
+        let live = recorder.liveSegments
+        XCTAssertEqual(live.count, 1)
+        XCTAssertEqual(live[0].locationCount, 2)
+        XCTAssertEqual(live[0].distanceMeters, metersPerDegreeLat * 0.001, accuracy: metersPerDegreeLat * 0.001 * 0.05)
+        // finish 后 liveSegments 与 segments 一致。
+        let trip = try XCTUnwrap(recorder.finish(at: t0.addingTimeInterval(2)))
+        XCTAssertEqual(recorder.liveSegments.count, trip.segments.count)
+    }
+
     func testTripTotalsMatchSegmentSums() throws {
         var recorder = TripRecorder()
         recorder.start(at: t0)

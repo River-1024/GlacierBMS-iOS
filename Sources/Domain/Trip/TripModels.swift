@@ -2,7 +2,7 @@ import Foundation
 
 /// 单次 GPS 定位采样。领域层不直接依赖 CoreLocation，
 /// 由采集层把 `CLLocation` 转换为本结构后喂给行程记录器。
-public struct GpsFix: Equatable, Sendable {
+public struct GpsFix: Equatable, Codable, Sendable {
     public let timestamp: Date
     public let latitude: Double
     public let longitude: Double
@@ -39,7 +39,7 @@ extension GpsFix {
 
 /// 行程区间标记。验收红线要求前台/后台/暂停/数据缺口四类必须显式区分，
 /// 不允许用旧值或插值填补缺口。
-public enum TripSegmentKind: String, Equatable, Sendable, CaseIterable {
+public enum TripSegmentKind: String, Equatable, Sendable, CaseIterable, Codable {
     case foreground
     case background
     case suspended
@@ -47,7 +47,7 @@ public enum TripSegmentKind: String, Equatable, Sendable, CaseIterable {
 }
 
 /// 行程区间。创建时即闭合（带起止时间），不可变。
-public struct TripSegment: Equatable, Sendable {
+public struct TripSegment: Equatable, Codable, Sendable {
     public let kind: TripSegmentKind
     public let startedAt: Date
     public let endedAt: Date
@@ -92,7 +92,7 @@ public enum TripState: Equatable, Sendable {
 }
 
 /// 一次完整行程。
-public struct Trip: Equatable, Sendable {
+public struct Trip: Equatable, Codable, Sendable {
     public let id: UUID
     public let startedAt: Date
     public let endedAt: Date?

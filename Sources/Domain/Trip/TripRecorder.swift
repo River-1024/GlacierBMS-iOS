@@ -23,6 +23,16 @@ public struct TripRecorder: Sendable {
     /// 行程开始时间（`start` 之后有效）。
     public private(set) var startedAt: Date?
 
+    /// 实时区间视图：闭合段 + 进行中段的即时快照（供 UI 展示实时统计，
+    /// 不改变状态机语义；进行中段以后一刻为界临时闭合）。
+    public var liveSegments: [TripSegment] {
+        var result = segments
+        if let open = openSegment {
+            result.append(open.closed(at: Date()))
+        }
+        return result
+    }
+
     struct OpenSegment: Sendable {
         var kind: TripSegmentKind
         var startedAt: Date
