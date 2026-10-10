@@ -39,6 +39,8 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
     @Published public private(set) var state: State = .idle
     @Published public private(set) var discoveredDevices: [DiscoveredDevice] = []
     @Published public private(set) var connectedDeviceName: String?
+    /// CoreBluetooth 外设身份；不使用可重名的广播名称隔离设置。
+    @Published public private(set) var connectedDeviceID: UUID?
     @Published public private(set) var latestSnapshot: BmsSnapshot?
     @Published public private(set) var snapshotHistory: [BmsSnapshot] = []
     @Published public private(set) var lastError: String?
@@ -119,6 +121,10 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
             return
         }
         stopScan()
+        if let previous = peripheral, previous.identifier != id {
+            central.cancelPeripheralConnection(previous)
+        }
+        teardownSession()
         isUserInitiatedDisconnect = false
         peripheral = target
         target.delegate = self
@@ -140,6 +146,10 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
 
     private func teardownSession() {
         assembler.reset()
+        connectedDeviceID = nil
+        connectedDeviceName = nil
+        latestSnapshot = nil
+        snapshotHistory = []
         characteristic = nil
         stopQueryTimer()
     }
@@ -243,7 +253,9 @@ extension BmsBluetoothService: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier,
+                  self.state == .connecting else { return }
+            self.connectedDeviceID = peripheral.identifier
             self.state = .discovering
             self.connectedDeviceName = peripheral.name ?? self.deviceSummaries[peripheral.identifier]?.name
             AppLog.ble.notice("已连接外设：\(self.connectedDeviceName ?? "未命名")，开始发现服务 FFE0")
@@ -253,7 +265,7 @@ extension BmsBluetoothService: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier else { return }
             self.teardownSession()
             self.state = .disconnected
             self.lastError = error?.localizedDescription ?? "连接失败"
@@ -263,7 +275,7 @@ extension BmsBluetoothService: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier else { return }
             self.teardownSession()
             if self.isUserInitiatedDisconnect {
                 AppLog.ble.notice("断开完成（用户主动）")
@@ -288,7 +300,7 @@ extension BmsBluetoothService: CBCentralManagerDelegate {
 extension BmsBluetoothService: CBPeripheralDelegate {
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier else { return }
             guard error == nil,
                   let service = peripheral.services?.first(where: { $0.uuid == Self.bmsServiceUUID }) else {
                 self.lastError = error?.localizedDescription ?? "未找到 BMS 服务 (FFE0)"
@@ -303,7 +315,7 @@ extension BmsBluetoothService: CBPeripheralDelegate {
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier else { return }
             guard error == nil,
                   let characteristic = service.characteristics?.first(where: { $0.uuid == Self.bmsCharacteristicUUID }) else {
                 self.lastError = error?.localizedDescription ?? "未找到 BMS 特征 (FFE1)"
@@ -319,7 +331,7 @@ extension BmsBluetoothService: CBPeripheralDelegate {
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier else { return }
             guard error == nil, characteristic.isNotifying else {
                 self.lastError = error?.localizedDescription ?? "开启 BMS 通知失败"
                 AppLog.ble.error("开启 Notify 失败：\(error?.localizedDescription ?? "isNotifying=false")")
@@ -336,7 +348,7 @@ extension BmsBluetoothService: CBPeripheralDelegate {
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peripheral?.identifier == peripheral.identifier else { return }
             guard error == nil, let value = characteristic.value else {
                 self.lastError = error?.localizedDescription ?? "读取 BMS 通知失败"
                 AppLog.ble.error("读取通知失败: \(error?.localizedDescription ?? "无数据")")
