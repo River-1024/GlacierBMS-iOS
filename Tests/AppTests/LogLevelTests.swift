@@ -32,7 +32,8 @@ final class LogLevelTests: XCTestCase {
         XCTAssertNil(LogLevel.parse("UNKNOWN"))
     }
 
-    func testCaseCount() {
+    func testAllCasesCount() {
+        // 注意：方法名不可用 testCaseCount —— 会与 XCTestCase 的同名属性冲突。
         XCTAssertEqual(LogLevel.allCases.count, 6)
     }
 }
