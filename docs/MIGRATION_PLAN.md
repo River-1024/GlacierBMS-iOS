@@ -1,7 +1,7 @@
 # 安途（ANTuRide）原生 iOS 首版总体规划与施工进度
 
-> 更新时间：2026-10-10 01:05（北京时间）  
-> 状态：阶段 1 代码完成；项目更名 `ANTuRide`（安途）已落地，全屏适配、液态玻璃、设备页过滤开关与 App 图标均已确认正常；BMS 真机链路待验收  
+> 更新时间：2026-10-10 11:40（北京时间）  
+> 状态：阶段 1 代码完成；项目更名 `ANTuRide`（安途）已落地，全屏适配、液态玻璃、设备页过滤开关与 App 图标均已确认正常；**真机连接 BMS 后闪退，已定位根因并新增日志系统取证**  
 > 目标：使用 SwiftUI + CoreBluetooth 建立一款可由个人签名安装的原生 iOS 驾驶仪表盘。
 
 ## 1. 已确认产品决策
@@ -168,7 +168,10 @@
 - [x] 2026-10-10 修复资源打包缺陷：核验 IPA 发现 `Assets.car` 与 `PrivacyInfo.xcprivacy` 均未进包，根因是 `project.yml` 使用了不生效的 target 级 `resources:` 键；改为 `sources:` + `buildPhase: resources`，并补 `CFBundleIconName: AppIcon`。CI 增加 `Verify app bundle contents` 断言步骤防回归。详见 `docs/PRIVACY_AUDIT.md` 第 7.1 节。
 - [x] 2026-10-10 更名与资源收尾验证：CI Run `37961690423`（`2e77a27`）全绿（5m52s），产物 1174236 字节、SHA-256 `197584f9dbe3a4481bd518c2eaeb094e0d99cb1ae4320e053c86b8c055312d9c`；解包核验包内已含 `Assets.car`（946264 字节）、`AppIcon60x60@2x.png`（120×120）、`PrivacyInfo.xcprivacy`（397 字节）与 `ANTuRideDomain.framework`，且无 `embedded.mobileprovision`。详见 `docs/CI_BUILD_RESULTS.md`。
 - [x] 2026-10-10 用户确认：设备页扫描过滤开关与 App 图标显示均正常（覆盖阶段 1 设备页 UI 与图标集成）。
+- [x] 2026-10-10 真机闪退根因定位（静态推演，未改代码）：真机连接 ANT BMS 成功后 1 秒内闪退。根因是 `AntProtocol.parseStatusResponse` 的**索引越界**——第 41 行守卫 `has(offset, temperatureCount * 2 + 4 + 2 + 2 + 2)` 漏算后续 `soc = u16(offset)` 的 `+2`，当帧长度恰为 `offset + tc*2 + 12` 且 ≥100 时守卫放行但真实读取越界；Swift `Data` 越界触发 `fatalError`，`try/catch` 无法捕获，故表现为无日志直接闪退。触发点在 `didUpdateValueFor` 通知回调（`BmsBluetoothService.swift`）。同时确认全仓**无任何日志系统**（`os_log`/`Logger`/`print` 零命中），崩溃现场无证据可查。
+- [x] 2026-10-10 新增**日志系统**（本次交付）：`Sources/Services/Logging/` 7 个文件——`LogLevel`（六级：debug/info/notice/warning/error/fault，可比较、可解析）、`LogEntry`（单行序列化 + 往返解析）、`LogFileWriter`（滚动落盘，2MB × 5 文件 ≈ 10MB 上限，每条 `synchronize` 保证崩溃前落盘）、`AppLog`（`os.Logger` 系统日志 + 沙盒文件**双写**门面，带分类入口 ble/protocolParser/ui/lifecycle）、`AppLogBootstrap`（启动安装 + 异常退出标记）、`LogHexDump`（原始帧十六进制转储）、`LogStore`（读取/过滤/导出/清除管理层）。设置页新增「运行日志」入口，支持**查看（等级着色 + 筛选）/ 导出下载 / 复制 / 清空（二次确认）/ 运行时记录阈值调整**。BLE 链路 30 处埋点覆盖扫描、连接、服务发现、Notify、原始帧转储、合包产出、解析成功/失败与全部状态迁移。
 - [ ] 阶段 1 真实 iPhone 与 ANT BMS 验收未开始（扫描、连接、Notify 分片、周期查询、断开恢复需真机）。
+- [ ] 阶段 1 解析器越界修复**未实施**（本次只加日志取证，不改协议逻辑，遵循「先取证后动刀」）。
 - [ ] 阶段 0/1 协议和合包测试以 CI（GitHub macOS runner）结果为准；本机 Windows 无法执行 Swift。
 
 ## 5.1 阶段 0 当前施工清单
@@ -183,8 +186,10 @@
 | 分片合包 | 已完成 | `iOS/Sources/Domain/Protocol/BmsFrameAssembler.swift` |
 | `0x11` 状态解析 | 已完成 | `iOS/Sources/Domain/Protocol/AntProtocol.swift` |
 | CoreBluetooth 连接骨架 | 已完成 | `iOS/Sources/Services/BmsBluetoothService.swift` |
+| 日志系统（六级 + 落盘 + 导出/清除/复制） | 已完成（未编译） | `iOS/Sources/Services/Logging/`（7 文件） |
+| 设置页与日志管理 UI | 已完成（未编译） | `iOS/Sources/Features/Settings/`（2 文件） |
 | 首页占位仪表盘 | 已完成 | `iOS/Sources/Features/Dashboard/DashboardView.swift` |
-| 单元测试 | 已完成（未执行） | `iOS/Tests/UnitTests/` |
+| 单元测试 | 已完成（未执行） | `iOS/Tests/UnitTests/`（22 例，含日志层 10 例） |
 | Xcode 编译/Swift 测试 | 待 macOS | 本机无 Swift/Xcode |
 | 真实 iPhone/BMS 验收 | 未开始 | 需要设备 |
 
@@ -240,3 +245,63 @@ xcodebuild -project ANTuRide.xcodeproj \
 - 无签名 IPA 不能直接安装；后续如要让 GitHub 自动输出可安装包，需要用户自行配置 Apple 签名证书、Provisioning Profile 和 GitHub Secrets。
 - 工作树状态：`main` 与 `origin/main` 一致，工作树干净，无凭据与旧项目引用；`.workbuddy/`、`build/`（CI 产物本地下载目录）与 `Support/Info.plist`（XcodeGen 生成）均已加入 `.gitignore`，不进入仓库。
 - 当前 HEAD：`c8853e7`（更名与图标批次：`a5ca7f8` 更名 + 图标 + 过滤开关，`2e77a27` 资源打包修复，`c8853e7` 构建记录）。
+
+## 10. 日志系统（2026-10-10 新增）
+
+### 10.1 为什么自建而非引入第三方
+
+调研了 CocoaLumberjack（13.3k★）、SwiftyBeaver、swift-log、XCGLogger 与 Apple 原生 `os.Logger`。结论：**没有任何库同时开箱满足「持久化 + 下载 + 清除 + 复制 + 明确分级」**——它们都是采集层，第 2–4 项属管理 UI 层，仍需自行实现。故采用：
+
+- **采集**：`os.Logger`（Apple 原生，零依赖，分级规范，真机不连 Xcode 也能用 Console.app 抓取）。
+- **持久化与管理**：自建 `LogFileWriter` + `LogStore`，承载滚动落盘与导出/清除/复制。
+
+未引入第三方依赖，避免增加 CI 失败面与二进制体积。
+
+### 10.2 文件构成
+
+| 文件 | 职责 |
+|---|---|
+| `LogLevel.swift` | 六级等级：`debug/info/notice/warning/error/fault`；可比较、可解析（兼容 WARN/CRITICAL 别名） |
+| `LogEntry.swift` | 单行序列化（`时间 \| 等级 \| 分类 \| 消息`）与往返解析；换行转义保证一行一记录 |
+| `LogFileWriter.swift` | 滚动写入：单文件 2 MB、保留 5 个（≈10 MB 上限）；**每条写入后 `synchronize`** 保证崩溃前落盘；失败静默降级 |
+| `AppLog.swift` | 门面：`os.Logger` + 文件**双写**；分类入口 `ble` / `protocolParser` / `ui` / `lifecycle`；运行时等级阈值持久化 |
+| `AppLogBootstrap.swift` | 启动安装 + 异常退出标记（下次启动报告「上次可能闪退」） |
+| `LogHexDump.swift` | 原始帧十六进制转储（协议排障必需） |
+| `LogStore.swift` | 读取 / 按等级过滤 / 导出文本 / 生成导出文件 / 清除；后台队列读取，主线程发布 |
+
+存储位置：`Application Support/Logs/`（不用 Documents/Caches——前者不被系统清理，也不暴露给「文件」App 被误删）。
+
+### 10.3 界面能力（设置 → 运行日志）
+
+| 能力 | 实现 |
+|---|---|
+| 查看 | 列表按等级着色（DEBUG 灰 / INFO 蓝 / NOTICE 绿 / WARN 橙 / ERROR 红 / FAULT 紫） |
+| 筛选 | Picker 选择「某等级及以上」，只影响显示不改记录行为 |
+| 下载/导出 | 生成 `.log` 临时文件 → 系统分享面板（含「存储到文件」） |
+| 复制 | 一键复制全部（含头部环境信息）；长按单条复制 |
+| 清除 | 带二次确认的「清空全部日志」 |
+| 阈值调整 | 设置页可改运行时最低记录等级并持久化 |
+
+### 10.4 BLE 链路埋点
+
+`BmsBluetoothService` 共 30 处埋点，覆盖：扫描启动/停止、名称过滤切换、设备发现与过滤、发起连接、连接成功、连接失败、意外断开与重连决策、服务 FFE0 发现、特征 FFE1 发现（含属性位文本）、Notify 开启、**收到的每个原始通知十六进制转储**、合包器产出帧数、**每个待解析帧的十六进制**、解析成功（含 SOC/电压/单体数/温度数/未解析尾部字节）与**解析返回 `nil` 的帧原文**、周期查询跳过原因。
+
+### 10.5 已知限制
+
+- 本机 Windows 无 Swift/Xcode，**全部代码未经编译**，需 CI（macOS runner）验证。
+- `fatalError`（越界 trap）本身无法被捕获；日志系统只能在终止前落盘已有记录，无法记录 trap 发生后的栈。
+- 日志文件上限约 10 MB，超出自动滚动淘汰最旧文件。
+
+## 11. 真机闪退根因分析（2026-10-10）
+
+**结论：`AntProtocol.parseStatusResponse` 索引越界，非 UI 或连接逻辑问题。**
+
+- **现象**：真机连接 ANT BMS 成功后约 1 秒内闪退。
+- **根因位置**：`Sources/Domain/Protocol/AntProtocol.swift`。第 41 行守卫
+  `guard has(offset, temperatureCount * 2 + 4 + 2 + 2 + 2)` 只覆盖到 `offset + tc*2 + 12`，
+  但紧随其后 `offset += 4`（MOS/均衡温度）与 `offset += 2`（总电压）之后，`current = i16(offset)` 实际读到 `offset + tc*2 + 14`，`soc = u16(offset)` 读到 `offset + tc*2 + 16`。
+- **触发判据（可静态计算）**：帧满足 `count == offset + tc*2 + 12` 且 `count >= 100` 时守卫放行、真实读取越界。
+- **为何无日志可查**：Swift `Data` 下标越界触发 `fatalError`，是不可捕获 trap，`try/catch` 无效；且全仓无日志系统，崩溃前无任何上下文。
+- **修复方案（尚未实施）**：修正守卫常量覆盖到 `soc` 读取结束，并在 `current`/`soc` 读取前各加 `has()` 检查；补 fuzz 测试断言「永不 trap」。
+- **执行顺序**：先加日志取证（本次已完成）→ 真机复现取原始帧证据 → 再修越界 → 验证。
+
