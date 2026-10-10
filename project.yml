@@ -56,6 +56,10 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSBluetoothAlwaysUsageDescription: 连接 ANT BMS 读取电池状态
         NSLocationWhenInUseUsageDescription: 记录速度、里程和行程能耗
+        # 阶段 2：未锁屏后台继续记录行程（D3）。配合 WhenInUse 授权，
+        # 导航类标准模式；不需要「始终」授权。
+        UIBackgroundModes:
+          - location
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide

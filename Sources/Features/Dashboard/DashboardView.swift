@@ -1,12 +1,14 @@
 import ANTuRideDomain
 import SwiftUI
 
-/// 首页驾驶仪表盘。阶段 1 绑定 BMS 实时数据；
-/// GPS 速度属阶段 2，综合续航属阶段 3，均以占位呈现，不伪造数值。
+/// 首页驾驶仪表盘。阶段 2 绑定 BMS 实时数据与 GPS 速度/行程控制；
+/// 综合续航属阶段 3，以占位呈现，不伪造数值。
 struct DashboardView: View {
     var goToDeviceSelection: () -> Void = {}
 
     @EnvironmentObject private var bms: BmsBluetoothService
+    @EnvironmentObject private var location: LocationService
+    @EnvironmentObject private var tripSession: TripSessionService
 
     var body: some View {
         NavigationStack {
@@ -21,7 +23,15 @@ struct DashboardView: View {
                             connectedName: bms.connectedDeviceName,
                             goToDeviceSelection: goToDeviceSelection
                         )
-                        SpeedCard()
+                        SpeedCard(fix: location.lastFix)
+                        TripControlCard(
+                            state: tripSession.state,
+                            distanceMeters: tripSession.liveDistanceMeters,
+                            energyWh: tripSession.liveEnergyWh,
+                            lastError: tripSession.lastError,
+                            onStart: { tripSession.startTrip() },
+                            onStop: { tripSession.stopTrip() }
+                        )
                         HStack(spacing: 12) {
                             MetricCard(title: "综合续航", value: "--", unit: "km", caption: "阶段 3 接入")
                             MetricCard(
@@ -148,19 +158,116 @@ private struct ConnectionStatusCard: View {
 }
 
 private struct SpeedCard: View {
+    /// 最近一次 GPS 定位；nil 表示尚未定位。
+    let fix: GpsFix?
+
     var body: some View {
         VStack(spacing: 4) {
-            Text("--")
+            Text(speedText)
                 .font(.system(size: 72, weight: .semibold, design: .rounded))
                 .monospacedDigit()
             Text("km/h").foregroundStyle(AppTheme.accent)
-            Text("GPS 速度将在阶段 2 接入")
+            Text(captionText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
         .glassCard()
+    }
+
+    private var speedKmh: Double? {
+        guard let fix, fix.isSpeedValid else { return nil }
+        return fix.speed * 3.6
+    }
+
+    private var speedText: String {
+        guard let speed = speedKmh else { return "--" }
+        return String(format: "%.0f", speed)
+    }
+
+    private var captionText: String {
+        guard let fix else { return "等待 GPS 定位" }
+        guard fix.isSpeedValid else { return "定位有效，速度待更新" }
+        if fix.horizontalAccuracy >= 0 {
+            return String(format: "GPS 精度 ±%.0fm", fix.horizontalAccuracy)
+        }
+        return "GPS 实时"
+    }
+}
+
+/// 行程控制卡：开始/结束行程，实时里程与净能耗。
+/// 空闲态显示占位说明，不伪造数值。
+private struct TripControlCard: View {
+    let state: TripState
+    let distanceMeters: Double
+    let energyWh: Double
+    let lastError: String?
+    let onStart: () -> Void
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(statusText, systemImage: statusIcon)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(isSuspended ? AppTheme.warning : AppTheme.accent)
+                Spacer()
+                if state == .idle {
+                    Button("开始行程", action: onStart)
+                        .adaptiveGlassProminentButton()
+                        .controlSize(.small)
+                } else {
+                    Button("结束行程", action: onStop)
+                        .adaptiveGlassProminentButton()
+                        .controlSize(.small)
+                }
+            }
+            if state != .idle {
+                HStack(spacing: 12) {
+                    stat(title: "里程", value: String(format: "%.2f", distanceMeters / 1000), unit: "km")
+                    stat(title: "净能耗", value: String(format: "%.1f", energyWh), unit: "Wh")
+                }
+            } else {
+                Text("开始行程后记录 GPS 速度、里程与 BMS 能耗；锁屏自动暂停并标记区间。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let lastError {
+                Text(lastError)
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.warning)
+            }
+        }
+        .padding()
+        .glassCard(cornerRadius: 16)
+    }
+
+    private var isSuspended: Bool { state == .suspended }
+
+    private var statusText: String {
+        switch state {
+        case .idle: return "行程"
+        case .recording: return "行程记录中"
+        case .suspended: return "已暂停（锁屏）"
+        case .finished: return "行程"
+        }
+    }
+
+    private var statusIcon: String {
+        switch state {
+        case .suspended: return "lock"
+        case .recording: return "record.circle"
+        default: return "point.topleft.down.curvedto.point.bottomright.up"
+        }
+    }
+
+    private func stat(title: String, value: String, unit: String) -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.title3.weight(.semibold)).monospacedDigit()
+            Text(unit).font(.caption).foregroundStyle(AppTheme.accent)
+        }
     }
 }
 
