@@ -33,7 +33,7 @@ public struct TripStore {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
-            options: .skidHiddenFiles
+            options: .skipsHiddenFiles
         ))?.filter { $0.pathExtension == "json" } ?? []
 
         let trips = files.compactMap { url -> Trip? in

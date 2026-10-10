@@ -3,6 +3,19 @@ import Combine
 import Foundation
 import UIKit
 
+/// 锁屏检测通知。用文档化的常量字符串自建 `NSNotification.Name`，
+/// 不依赖 `UIApplication` 的 Swift 成员名（不同 SDK 版本命名不一致，CI 已踩坑）。
+/// 对应 ObjC 常量 `UIApplicationProtectedDataDidBecomeUnavailableNotification` /
+/// `UIApplicationProtectedDataWillBecomeAvailableNotification`。
+extension NSNotification.Name {
+    static let protectedDataDidBecomeUnavailable = NSNotification.Name(
+        "UIApplicationProtectedDataDidBecomeUnavailableNotification"
+    )
+    static let protectedDataWillBecomeAvailable = NSNotification.Name(
+        "UIApplicationProtectedDataWillBecomeAvailableNotification"
+    )
+}
+
 /// 行程会话服务（阶段 2）：把 GPS 定位与 BMS 快照接入领域层行程记录器。
 ///
 /// 生命周期语义（对应 D3/D4 与验收红线）：
@@ -97,7 +110,7 @@ public final class TripSessionService: NSObject, ObservableObject {
         let center = NotificationCenter.default
         lockObservers.append(
             center.addObserver(
-                forName: UIApplication.protectedDataDidBecomeUnavailableNotification,
+                forName: .protectedDataDidBecomeUnavailable,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
@@ -106,7 +119,7 @@ public final class TripSessionService: NSObject, ObservableObject {
         )
         lockObservers.append(
             center.addObserver(
-                forName: UIApplication.protectedDataWillBecomeAvailableNotification,
+                forName: .protectedDataWillBecomeAvailable,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
