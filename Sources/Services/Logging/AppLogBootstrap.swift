@@ -31,7 +31,7 @@ public enum AppLogBootstrap {
     private static func registerLifecycleObservers() {
         let center = NotificationCenter.default
         center.addObserver(
-            forName: UIApplicationDidEnterBackgroundNotification,
+            forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
             queue: .main
         ) { _ in
@@ -41,7 +41,7 @@ public enum AppLogBootstrap {
         }
 
         center.addObserver(
-            forName: UIApplicationWillTerminateNotification,
+            forName: UIApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { _ in
