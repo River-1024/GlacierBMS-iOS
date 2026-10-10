@@ -94,7 +94,7 @@
 
 ### 阶段 2：GPS、行程和后台未锁屏记录
 
-> 2026-10-10 G1 施工记录：领域层已落盘——`Sources/Domain/Trip/TripModels.swift`（`GpsFix` / `TripSegmentKind` 四类区间标记 / `TripSegment` / `TripState` / `Trip`）与 `Sources/Domain/Trip/TripRecorder.swift`（行程记录器状态机：start/setPhase/suspend/resume/finish + GPS 定位摄入 + BMS 功率配对积分）。三条验收红线在领域层落死：暂停显式成 `suspended` 段；GPS 无效计 `invalidLocationCount`、长间隔插 `gap` 段且不追溯里程、BMS 采样间隔 >5s 重置配对基准不补算能耗；前后台切换为同行程段边界。单测 `Tests/UnitTests/TripRecorderTests.swift` 10 例；Windows 侧 Python 逐字节移植 8 场景模拟全过（前台里程、无效定位、缺口段、前后台、暂停恢复、能耗配对、断开不补算、状态机守卫）。待 CI 编译验证；G2（LocationService + 会话接线）、G3（行程 UI）未开始。
+> 2026-10-10 G1 施工记录：领域层已落盘——`Sources/Domain/Trip/TripModels.swift`（`GpsFix` / `TripSegmentKind` 四类区间标记 / `TripSegment` / `TripState` / `Trip`）与 `Sources/Domain/Trip/TripRecorder.swift`（行程记录器状态机：start/setPhase/suspend/resume/finish + GPS 定位摄入 + BMS 功率配对积分）。三条验收红线在领域层落死：暂停显式成 `suspended` 段；GPS 无效计 `invalidLocationCount`、长间隔插 `gap` 段且不追溯里程、BMS 采样间隔 >5s 重置配对基准不补算能耗；前后台切换为同行程段边界。单测 `Tests/UnitTests/TripRecorderTests.swift` 11 例。**里程语义（重要）：定位两端速度可信时按平均速度×Δt 计里程（GPS 速度优先），否则回退 haversine 坐标差分**——首轮 CI（Run `38031999208`）3 例失败即测试误按纯 haversine 断言所致，已修正测试并补速度积分断言（提交 `762368b`）。CI Run `38032277501` 全绿，IPA 归档 `build/ci/762368b/ANTuRide-unsigned.ipa`（1310748 字节）。Windows 侧 Python 移植 8 场景模拟全过。G2（LocationService + 会话接线）、G3（行程 UI）未开始。
 
 目标：把手机定位和 BMS 数据纳入本地行程。
 
