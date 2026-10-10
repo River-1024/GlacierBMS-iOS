@@ -29,8 +29,9 @@ final class TripRecorderTests: XCTestCase {
     func testStartCreatesForegroundSegmentAndRecordingState() throws {
         var recorder = TripRecorder()
         recorder.start(at: t0)
-        recorder.ingestLocation(fix(0))
-        recorder.ingestLocation(fix(1, lat: 30.001))
+        // 速度无效（-1）迫使实现走 haversine 路径，距离可由纬度差静态确定。
+        recorder.ingestLocation(fix(0, speed: -1))
+        recorder.ingestLocation(fix(1, lat: 30.001, speed: -1))
         let trip = recorder.finish(at: t0.addingTimeInterval(2))
         XCTAssertEqual(recorder.state, .finished)
         let tripUnwrapped = try XCTUnwrap(trip)
@@ -41,13 +42,23 @@ final class TripRecorderTests: XCTestCase {
         XCTAssertEqual(tripUnwrapped.totalDistanceMeters, metersPerDegreeLat * 0.001, accuracy: metersPerDegreeLat * 0.001 * 0.05)
     }
 
+    func testSpeedIntegrationPreferredWhenSpeedsValid() throws {
+        var recorder = TripRecorder()
+        recorder.start(at: t0)
+        // 两端速度均可信：里程 = 平均速度 5 m/s × 1 s，而非坐标差分。
+        recorder.ingestLocation(fix(0, speed: 5))
+        recorder.ingestLocation(fix(1, speed: 5))
+        let trip = try XCTUnwrap(recorder.finish(at: t0.addingTimeInterval(2)))
+        XCTAssertEqual(trip.totalDistanceMeters, 5.0, accuracy: 1e-9)
+    }
+
     func testInvalidFixCountedButNoDistance() throws {
         var recorder = TripRecorder()
         recorder.start(at: t0)
-        recorder.ingestLocation(fix(0))
-        recorder.ingestLocation(fix(1, accuracy: 999)) // 精度超限
-        recorder.ingestLocation(fix(2, lat: 95))       // 纬度非法
-        recorder.ingestLocation(fix(3, lat: 30.001))
+        recorder.ingestLocation(fix(0, speed: -1))
+        recorder.ingestLocation(fix(1, speed: -1, accuracy: 999)) // 精度超限
+        recorder.ingestLocation(fix(2, lat: 95))                  // 纬度非法
+        recorder.ingestLocation(fix(3, lat: 30.001, speed: -1))
         let trip = try XCTUnwrap(recorder.finish(at: t0.addingTimeInterval(4)))
         XCTAssertEqual(trip.segments[0].invalidLocationCount, 2)
         XCTAssertEqual(trip.segments[0].locationCount, 2)
@@ -69,7 +80,9 @@ final class TripRecorderTests: XCTestCase {
         XCTAssertEqual(trip.segments[1].startedAt, t0)
         XCTAssertEqual(trip.segments[1].endedAt, t0.addingTimeInterval(30))
         XCTAssertEqual(trip.segments[2].kind, .foreground)
-        XCTAssertEqual(trip.segments[2].locationCount, 1)
+        // 触发缺口的定位点计入闭合段（segments[0] 共 2 点）；新段自该点重新起算。
+        XCTAssertEqual(trip.segments[0].locationCount, 2)
+        XCTAssertEqual(trip.segments[2].locationCount, 0)
     }
 
     func testPhaseSwitchKeepsSingleTripWithTwoSegments() throws {
