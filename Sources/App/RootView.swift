@@ -21,7 +21,7 @@ struct RootView: View {
             BmsDetailView()
                 .tabItem { Label("详情", systemImage: "battery.100") }
                 .tag(Tab.detail)
-            SettingsPlaceholderView()
+            SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(Tab.settings)
         }
@@ -47,14 +47,5 @@ struct PlaceholderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
-    }
-}
-
-private struct SettingsPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            PlaceholderView(title: "设置", message: "校准、续航参数与本地导出将在阶段 3 接入")
-                .navigationTitle("设置")
-        }
     }
 }
