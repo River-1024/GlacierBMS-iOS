@@ -131,15 +131,15 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
          registry: BluetoothDeviceRegistry? = nil) {
         self.defaults = defaults
         self.registry = registry ?? .shared
-        rememberedDeviceID = defaults.string(forKey: Self.rememberedDeviceDefaultsKey).flatMap(UUID.init(uuidString:))
-        rememberedDeviceName = rememberedDeviceID == nil ? nil : defaults.string(forKey: Self.rememberedDeviceNameDefaultsKey)
-        isKeywordFilterEnabled = defaults.object(forKey: Self.keywordFilterDefaultsKey) as? Bool ?? true
         self.startupAutoConnectEnabled = startupAutoConnectEnabled
         self.historyStore = historyStore
         self.clock = clock
         self.uptime = uptime
         self.createsBluetoothManager = createsBluetoothManager
         super.init()
+        rememberedDeviceID = defaults.string(forKey: Self.rememberedDeviceDefaultsKey).flatMap(UUID.init(uuidString:))
+        rememberedDeviceName = rememberedDeviceID == nil ? nil : defaults.string(forKey: Self.rememberedDeviceNameDefaultsKey)
+        isKeywordFilterEnabled = defaults.object(forKey: Self.keywordFilterDefaultsKey) as? Bool ?? true
         if createsBluetoothManager { central = CBCentralManager(delegate: self, queue: .main) }
     }
 
