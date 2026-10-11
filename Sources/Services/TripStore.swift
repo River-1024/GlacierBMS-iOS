@@ -101,7 +101,8 @@ public struct TripStore {
     /// RFC 4180：引号加倍，含逗号/引号/CR/LF 的单元格加引号，行以 CRLF 分隔。
     static func csvRow(_ fields: [String]) -> String {
         fields.map { value in
-            guard value.contains(",") || value.contains("\"") || value.contains("\r") || value.contains("\n") else {
+            // CRLF is one Swift Character; inspect scalars so both line endings are detected.
+            guard value.unicodeScalars.contains(where: { $0 == "," || $0 == "\"" || $0 == "\r" || $0 == "\n" }) else {
                 return value
             }
             return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
