@@ -488,3 +488,15 @@ xcodebuild -project ANTuRide.xcodeproj \
 首页 27 槽位/39 指标与控制器真实数据、驾驶设置消费、续航窗口平均速度/km/Ah、行程逐点 CSV/分页及控制器 18 列 CSV/XLSX 已在当前未提交工作树接入。具体施工与测试边界见 CONSTRUCTION_LOG 步骤 020–023。
 
 上述本批工作树尚无对应 macOS CI / Xcode 编译 / XCTest 运行结果，不能套用 ced33b3 的旧 CI。G2 后台/锁屏、真实控制器与加速车辆测试仍由真机验收证明；地图轨迹、Live Activity/CarPlay 尚未实现。取消的电池学习与 Android 私有历史导入不重新纳入。未自动提交、推送或部署。
+
+## 本批GitHub验证与IPA交付（北京时间 2026-10-11 10:55:06）
+
+此节覆盖上文“当前未提交/待CI”的历史状态，不改变真机验收边界。
+- 分支：codex/ios-parity-20261010；功能批次c584c42，最终已验证源码提交5bd14933f13814811e95c89a83a5616aa8c783c7。
+- GitHub Actions： https://github.com/River-1024/GlacierBMS-iOS/actions/runs/38106226167 ，全部成功。
+- SwiftPM领域测试130项、iOS模拟器单元测试269项、UI测试3项，全部0失败；Release设备构建及包资源校验成功。
+- 本地IPA：build/ci/5bd1493/ANTuRide-unsigned.ipa；latest副本同步。大小2161766字节。
+- SHA-256：b3b6ff01eb4198fef4331fa5e46b54e6b03aa769c5a9866d84dea86a048aeebe。
+- 下载后ZIP CRC、Assets.car、PrivacyInfo.xcprivacy、图标、Bundle ID和显示名核验通过；无embedded.mobileprovision及_CodeSignature。
+- build/ci/5bd1493/保存run.json、ci.log和artifact-verification.json；生成物不入Git。
+- unsigned IPA仍需签名后安装；不代表真实iPhone/BMS/控制器或车辆加速验收。地图轨迹、Live Activity/CarPlay仍未实现。

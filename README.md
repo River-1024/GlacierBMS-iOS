@@ -50,8 +50,8 @@ build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
 
 每个施工步骤同步更新 `docs/CONSTRUCTION_LOG.md`，记录文件范围、实际结果、验证命令/证据、失败与剩余风险。代码、测试、CI/模拟器及真机验收分别标记，不用旧 CI 证明当前工作树。
 
-## 当前未提交功能批次（2026-10-11 10:27:32 +08:00）
+## 当前功能批次与IPA（北京时间 2026-10-11 10:55:06）
 
 首页27槽位/39指标与真实控制器数据、驾驶设置消费、续航窗口指标、行程CSV/分页和控制器18列CSV/XLSX已接入。新增入口：**设置 → RPM加速测试与历史**。加速仅RPM，默认系数0.0782，车速(km/h)=原始RPM×系数×方向；无GPS/IMU和模拟结果。
 
-此批为本地源码交付，尚无对应Swift/Xcode编译、XCTest执行或新IPA；不能使用旧CI/IPA测试这些新增功能。详细内容与剩余地图/平台扩展及真机边界见docs/CONSTRUCTION_LOG.md步骤020–024和IOS_ANDROID_PARITY_AUDIT.md最新节。
+此批已提交推送；最终源码5bd1493 / GitHub Actions Run 38106226167完整成功：130项领域测试、269项iOS单测、3项UI测试均0失败，Release设备构建通过。IPA已下载到build/ci/5bd1493/ANTuRide-unsigned.ipa（2161766字节），latest副本已同步。产物为unsigned，需签名后安装；真实硬件/车辆验收、地图轨迹与平台扩展边界见docs/CONSTRUCTION_LOG.md步骤025–030和IOS_ANDROID_PARITY_AUDIT.md最新节。
