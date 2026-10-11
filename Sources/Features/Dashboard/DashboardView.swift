@@ -1,17 +1,19 @@
 import ANTuRideDomain
+import Charts
 import SwiftUI
 
-/// 首页驾驶仪表盘。连接与行程控制固定显示，其余实时卡片使用已保存布局。
+/// 首页只显示已保存布局的驾驶参数；连接与行程操作分别位于设备和行程 Tab。
 @MainActor
 struct DashboardView: View {
-    var goToDeviceSelection: () -> Void = {}
-
     @EnvironmentObject private var bms: BmsBluetoothService
     @EnvironmentObject private var location: LocationService
-    @EnvironmentObject private var tripSession: TripSessionService
     @EnvironmentObject private var rangeService: RangeService
     @EnvironmentObject private var controller: ControllerBluetoothService
     @EnvironmentObject private var driving: DrivingSettingsStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var heroValueSize: CGFloat = 56
+    @ScaledMetric(relativeTo: .title2) private var primaryValueSize: CGFloat = 28
+    @ScaledMetric(relativeTo: .title3) private var compactValueSize: CGFloat = 20
     // 与设置编辑器共用同一偏好键；保存后即使 Tab 未重建也会刷新。
     @AppStorage(HomeParameterPrefs.key) private var storedLayout = ""
 
@@ -19,38 +21,24 @@ struct DashboardView: View {
         HomeParameterPrefs.decode(storedLayout) ?? .androidDefault
     }
 
-    private var rangeDisplay: String {
-        guard rangeService.status == .valid,
-              let kilometers = rangeService.prediction?.predictedRangeKm,
-              kilometers.isFinite, kilometers >= 0 else { return "--" }
-        return String(format: "%.1f", kilometers)
-    }
-
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let freshness = BmsFreshnessEvaluator().evaluate(snapshot: bms.latestSnapshot, now: context.date)
-                    // 窄屏保持单列；横屏/宽屏双列，顺序始终从左到右、从上到下。
-                    let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: geometry.size.width >= 600 ? 2 : 1)
+                    let columns = Array(repeating: GridItem(.flexible(), spacing: 12),
+                                        count: geometry.size.width >= 600
+                                            && !dynamicTypeSize.isAccessibilitySize
+                                            && driving.settings.valueScale < 1.5 ? 2 : 1)
                     ScrollView {
-                        VStack(spacing: 16) {
-                            ConnectionStatusCard(
-                                state: bms.state,
-                                freshness: freshness,
-                                connectedName: bms.connectedDeviceName,
-                                goToDeviceSelection: goToDeviceSelection
-                            )
-                            TripControlCard(
-                                state: tripSession.state,
-                                distanceMeters: tripSession.liveDistanceMeters,
-                                energyWh: tripSession.liveEnergyWh,
-                                lastError: tripSession.lastError,
-                                onStart: { tripSession.startTrip() },
-                                onStop: { tripSession.stopTrip() }
-                            )
+                        VStack(spacing: 12) {
                             if homeConfig.usesSlotLayout {
                                 slotDashboard(freshness: freshness, size: geometry.size)
+                            } else if homeConfig.visibleCardIDs.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("没有显示的首页参数").foregroundStyle(.secondary)
+                                    rangeLink
+                                }
                             } else {
                                 LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                                     ForEach(homeConfig.visibleCardIDs) { id in
@@ -60,26 +48,55 @@ struct DashboardView: View {
                                 }
                             }
                         }
-                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .frame(minHeight: geometry.size.height, alignment: .top)
                     }
-                    .navigationTitle("安途")
+                    .accessibilityIdentifier("dashboard.parameter-content")
+                    .background(AppTheme.background)
                 }
             }
+            // 仅根页隐藏导航栏，不忽略状态栏、刘海或 Tab 的系统安全区。
+            .toolbar(.hidden, for: .navigationBar)
         }
+    }
+
+    private var rangeLink: some View {
+        NavigationLink {
+            RangeView()
+                .toolbar(.visible, for: .navigationBar)
+        } label: {
+            Label("续航", systemImage: "gauge.with.dots.needle.33percent")
+                .font(.subheadline)
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .accessibilityLabel("综合续航")
+        .accessibilityIdentifier("dashboard.range")
     }
 
     /// 兼容已保存的旧版十卡片布局，不因切换到槽位布局而丢失用户偏好。
     @ViewBuilder
     private func parameterCard(_ id: HomeParameterCardID, freshness: BmsDataFreshness) -> some View {
+        let showsRangeLink = homeConfig.visibleCardIDs.first == id
         switch id {
-        case .currentChart: powerGraphic
+        case .currentChart:
+            BmsHistoryChartCard(history: bms.snapshotHistory, metric: .current) {
+                if showsRangeLink { rangeLink }
+            }
         case .status:
-            StatusChipsCard(snapshot: freshness.level == .fresh ? bms.latestSnapshot : nil, isStale: freshness.level == .stale)
+            VStack(alignment: .leading, spacing: 8) {
+                if showsRangeLink { rangeLink }
+                StatusChipsCard(snapshot: freshness.level == .fresh ? bms.latestSnapshot : nil, isStale: freshness.level == .stale)
+            }
         case .capacityAndHealth:
-            VStack { slotCard(.init(slotId: id.rawValue, metricId: "bms_capacity"), freshness: freshness)
-                slotCard(.init(slotId: "soh", metricId: "bms_soh"), freshness: freshness) }
+            VStack(spacing: 8) {
+                slotCard(.init(slotId: id.rawValue, metricId: "bms_capacity"), freshness: freshness, showsRangeLink: showsRangeLink)
+                slotCard(.init(slotId: "soh", metricId: "bms_soh"), freshness: freshness)
+            }
         default:
-            slotCard(.init(slotId: id.rawValue, metricId: legacyMetricID(id)), freshness: freshness, fontSize: 32)
+            slotCard(.init(slotId: id.rawValue, metricId: legacyMetricID(id)), freshness: freshness,
+                     fontSize: primaryValueSize, showsRangeLink: showsRangeLink)
         }
     }
 
@@ -101,7 +118,7 @@ struct DashboardView: View {
     @ViewBuilder
     private var powerGraphic: some View {
         if driving.settings.defaultPowerDisplayMode == .curve {
-            PowerChartCard(history: bms.snapshotHistory)
+            BmsHistoryChartCard(history: bms.snapshotHistory, metric: .power) { EmptyView() }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 Text("实时功率").font(.headline)
@@ -113,43 +130,49 @@ struct DashboardView: View {
                         .tint(metricColor("bms_power", snapshot: snapshot))
                     Text(String(format: "%.0f W / %.0f W", power, base)).monospacedDigit()
                 } else { Text("--").foregroundStyle(.secondary) }
-            }.padding().glassCard()
+            }
+            .padding()
+            .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
     @ViewBuilder
     private func slotDashboard(freshness: BmsDataFreshness, size: CGSize) -> some View {
-        let portrait = HomeParameterLayout.isPortrait(width: Double(size.width), height: Double(size.height))
-        if portrait {
-            topSlotCards(freshness: freshness, portrait: true)
-            powerGraphic
-                .frame(minHeight: 190)
-        } else {
-            HStack(alignment: .top, spacing: 10) {
-                topSlotCards(freshness: freshness, portrait: false)
-                    .frame(width: 290)
+        let wide = size.width >= 600
+            && size.width > size.height
+            && !dynamicTypeSize.isAccessibilitySize
+            && driving.settings.valueScale < 1.5
+        if wide {
+            HStack(alignment: .top, spacing: 12) {
+                topSlotCards(freshness: freshness)
+                    .frame(maxWidth: .infinity)
                 powerGraphic
-                    .frame(maxWidth: .infinity, minHeight: 280)
+                    .frame(maxWidth: .infinity)
             }
+        } else {
+            topSlotCards(freshness: freshness)
+            powerGraphic
         }
         bottomSlots(in: .vehicle, freshness: freshness)
         bottomSlots(in: .controller, freshness: freshness)
     }
 
-    private func topSlotCards(freshness: BmsDataFreshness, portrait: Bool) -> some View {
-        VStack(spacing: portrait ? 8 : 6) {
+    private func topSlotCards(freshness: BmsDataFreshness) -> some View {
+        VStack(spacing: 8) {
             ForEach(HomeParameterSlotDefinition.heroIDs, id: \.self) { slotId in
                 if let metricId = homeConfig.metricId(for: slotId) {
                     slotCard(HomeParameterAssignment(slotId: slotId, metricId: metricId), freshness: freshness,
-                             fontSize: slotId == "top_speed" ? (portrait ? 84 : 60) : (portrait ? 32 : 26))
-                        .frame(minHeight: slotId == "top_speed" ? (portrait ? 148 : 96) : (portrait ? 82 : 60))
+                             fontSize: slotId == "top_speed" ? heroValueSize : primaryValueSize,
+                             showsRangeLink: slotId == "top_speed")
                 }
             }
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 8),
+                                count: dynamicTypeSize.isAccessibilitySize || driving.settings.valueScale >= 1.5 ? 1 : 2)
+            LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(HomeParameterSlotDefinition.gridIDs, id: \.self) { slotId in
                     if let metricId = homeConfig.metricId(for: slotId) {
                         slotCard(HomeParameterAssignment(slotId: slotId, metricId: metricId), freshness: freshness,
-                                 fontSize: portrait ? 28 : 22)
+                                 fontSize: primaryValueSize)
                     }
                 }
             }
@@ -158,30 +181,42 @@ struct DashboardView: View {
 
     @ViewBuilder
     private func bottomSlots(in region: HomeParameterRegion, freshness: BmsDataFreshness) -> some View {
-        let rows = HomeParameterLayout.rows(homeConfig.assignments(in: region), in: region)
+        let assignments = homeConfig.assignments(in: region)
+        let rows = HomeParameterLayout.rows(assignments, in: region)
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text(region.title).font(.headline)
-                ForEach(rows.indices, id: \.self) { index in
-                    let row = rows[index]
-                    GeometryReader { geometry in
-                        let column = max(0, (geometry.size.width - 16) / 3)
-                        HStack(spacing: 8) {
-                            ForEach(row) { assignment in
-                                let span = HomeParameterLayout.span(assignment, in: region)
-                                slotCard(assignment, freshness: freshness)
-                                    .frame(width: column * CGFloat(span) + CGFloat(span - 1) * 8)
+                if dynamicTypeSize.isAccessibilitySize || driving.settings.valueScale >= 1.5 {
+                    LazyVStack(spacing: 8) {
+                        ForEach(assignments) { assignment in
+                            slotCard(assignment, freshness: freshness)
+                        }
+                    }
+                } else {
+                    Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                        ForEach(rows.indices, id: \.self) { index in
+                            let row = rows[index]
+                            let used = row.reduce(0) { $0 + HomeParameterLayout.span($1, in: region) }
+                            GridRow(alignment: .top) {
+                                ForEach(row) { assignment in
+                                    slotCard(assignment, freshness: freshness)
+                                        .gridCellColumns(HomeParameterLayout.span(assignment, in: region))
+                                }
+                                ForEach(0..<(3 - used), id: \.self) { _ in
+                                    Color.clear
+                                        .gridCellUnsizedAxes([.horizontal, .vertical])
+                                        .accessibilityHidden(true)
+                                }
                             }
                         }
-                    }.frame(height: 118)
-
+                    }
                 }
             }
         }
     }
 
     private func slotCard(_ assignment: HomeParameterAssignment, freshness: BmsDataFreshness,
-                          fontSize: CGFloat = 14) -> some View {
+                          fontSize: CGFloat? = nil, showsRangeLink: Bool = false) -> some View {
         let snapshot = bms.state == .ready && freshness.level == .fresh ? bms.latestSnapshot : nil
         let readout = HomeParameterReadout.read(
             metricId: assignment.metricId, snapshot: snapshot,
@@ -198,12 +233,31 @@ struct DashboardView: View {
                 return bms.state == .ready && age >= 0 && age <= 10 ? bms.rssi : nil
             }
         )
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(driving.settings.showTextDescriptions ? readout.title : readout.title.components(separatedBy: " · ").last ?? readout.title).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-            Text(readout.value).font(.system(size: fontSize * driving.settings.valueScale, weight: .semibold, design: .rounded))
+        return VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    parameterTitle(readout.title)
+                    if showsRangeLink { Spacer(minLength: 8); rangeLink }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    parameterTitle(readout.title)
+                    if showsRangeLink { rangeLink }
+                }
+            }
+            Text(readout.value)
+                .font(.system(size: (fontSize ?? compactValueSize) * driving.settings.valueScale,
+                              weight: .semibold, design: .rounded))
                 .foregroundStyle(metricColor(assignment.metricId, snapshot: snapshot))
-                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.3)
-            if !readout.unit.isEmpty { Text(readout.unit).font(.caption2).foregroundStyle(AppTheme.accent) }
+                .monospacedDigit()
+                .lineLimit(dynamicTypeSize.isAccessibilitySize || driving.settings.valueScale >= 1.5 || readout.unit.isEmpty ? nil : 1)
+                .fixedSize(horizontal: false, vertical: true)
+                .minimumScaleFactor(0.75)
+                .accessibilityLabel("\(readout.title)，\(readout.value) \(readout.unit)")
+            if !readout.unit.isEmpty { Text(readout.unit).font(.caption).foregroundStyle(AppTheme.accent) }
+            if readout.value == "--", HomeParameterMetricDefinition.definition(for: assignment.metricId)?.source == .bms {
+                Text(bms.state != .ready ? "BMS 未连接" : freshness.level == .stale ? "数据已过期" : "等待 BMS 数据")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if assignment.metricId == "app_gps_speed", let fix = location.lastFix, let speed = fix.speedKmhForDisplay,
                location.isUpdating, Date().timeIntervalSince(fix.timestamp) >= 0,
                Date().timeIntervalSince(fix.timestamp) <= 10 {
@@ -211,14 +265,21 @@ struct DashboardView: View {
                     .tint(metricColor(assignment.metricId, snapshot: snapshot))
             }
             if driving.settings.showTextDescriptions && assignment.metricId == "app_range" {
-                Text(rangeService.reasonText).font(.caption2).foregroundStyle(.secondary)
+                Text(rangeService.reasonText).font(.caption).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .glassCard(cornerRadius: 8)
+        .padding(12)
+        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityIdentifier("dashboard.slot.\(assignment.slotId)")
     }
+
+    private func parameterTitle(_ title: String) -> some View {
+        Text(driving.settings.showTextDescriptions ? title : title.components(separatedBy: " · ").last ?? title)
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var freshControllerTelemetry: MotorControllerTelemetry? {
         guard controller.state == .ready, let snapshot = controller.latestSnapshot else { return nil }
         let age = Date().timeIntervalSince(snapshot.receivedAt)
@@ -318,206 +379,6 @@ struct HomeParameterReadout: Equatable {
     }
 }
 
-private struct ConnectionStatusCard: View {
-    let state: BmsBluetoothService.State
-    let freshness: BmsDataFreshness
-    let connectedName: String?
-    let goToDeviceSelection: () -> Void
-
-    var body: some View {
-        HStack {
-            Circle().fill(statusColor).frame(width: 10, height: 10)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(statusText).font(.subheadline.weight(.medium))
-                Text(freshnessText).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if state == .ready {
-                Text(connectedName ?? "ANT BMS")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Button("选择设备", action: goToDeviceSelection)
-                    .adaptiveGlassProminentButton()
-                    .controlSize(.small)
-            }
-        }
-        .padding()
-        .glassCard(cornerRadius: 16)
-    }
-
-    private var statusColor: Color {
-        switch state {
-        case .ready: return freshness.level == .stale ? AppTheme.warning : AppTheme.success
-        case .scanning, .connecting, .discovering, .reconnecting: return AppTheme.accent
-        case .poweredOff: return .secondary
-        case .idle, .disconnected: return AppTheme.warning
-        }
-    }
-
-    private var statusText: String {
-        switch state {
-        case .idle: return "尚未连接 BMS"
-        case .poweredOff: return "蓝牙未开启"
-        case .scanning: return "正在扫描设备…"
-        case .connecting: return "正在连接…"
-        case .discovering: return "正在发现服务…"
-        case .ready: return "已连接"
-        case .reconnecting: return "连接中断，正在重连…"
-        case .disconnected: return "尚未连接 BMS"
-        }
-    }
-
-    private var freshnessText: String {
-        switch freshness.level {
-        case .noData: return "等待 BMS 数据"
-        case .fresh: return "数据实时"
-        case .stale: return "数据已过期 \(Int(freshness.ageSeconds ?? 0))s"
-        }
-    }
-}
-
-private struct SpeedCard: View {
-    /// 最近一次 GPS 定位；nil 表示尚未定位。
-    let fix: GpsFix?
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(speedText)
-                .font(.system(size: 72, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-            Text("km/h").foregroundStyle(AppTheme.accent)
-            Text(captionText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
-        .glassCard()
-    }
-
-    private var speedKmh: Double? {
-        guard let fix, fix.isSpeedValid else { return nil }
-        return fix.speed * 3.6
-    }
-
-    private var speedText: String {
-        guard let speed = speedKmh else { return "--" }
-        return String(format: "%.0f", speed)
-    }
-
-    private var captionText: String {
-        guard let fix else { return "等待 GPS 定位" }
-        guard fix.isSpeedValid else { return "定位有效，速度待更新" }
-        if fix.horizontalAccuracy >= 0 {
-            return String(format: "GPS 精度 ±%.0fm", fix.horizontalAccuracy)
-        }
-        return "GPS 实时"
-    }
-}
-
-/// 行程控制卡：开始/结束行程，实时里程与净能耗。
-/// 空闲态显示占位说明，不伪造数值。
-private struct TripControlCard: View {
-    let state: TripState
-    let distanceMeters: Double
-    let energyWh: Double
-    let lastError: String?
-    let onStart: () -> Void
-    let onStop: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label(statusText, systemImage: statusIcon)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(isSuspended ? AppTheme.warning : AppTheme.accent)
-                Spacer()
-                if state == .idle {
-                    Button("开始行程", action: onStart)
-                        .adaptiveGlassProminentButton()
-                        .controlSize(.small)
-                } else {
-                    Button("结束行程", action: onStop)
-                        .adaptiveGlassProminentButton()
-                        .controlSize(.small)
-                }
-            }
-            if state != .idle {
-                HStack(spacing: 12) {
-                    stat(title: "里程", value: String(format: "%.2f", distanceMeters / 1000), unit: "km")
-                    stat(title: "净能耗", value: String(format: "%.1f", energyWh), unit: "Wh")
-                }
-            } else {
-                Text("开始行程后记录 GPS 速度、里程与 BMS 能耗；锁屏自动暂停并标记区间。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let lastError {
-                Text(lastError)
-                    .font(.caption2)
-                    .foregroundStyle(AppTheme.warning)
-            }
-        }
-        .padding()
-        .glassCard(cornerRadius: 16)
-    }
-
-    private var isSuspended: Bool { state == .suspended }
-
-    private var statusText: String {
-        switch state {
-        case .idle: return "行程"
-        case .recording: return "行程记录中"
-        case .suspended: return "已暂停（锁屏）"
-        case .finished: return "行程"
-        }
-    }
-
-    private var statusIcon: String {
-        switch state {
-        case .suspended: return "lock"
-        case .recording: return "record.circle"
-        default: return "point.topleft.down.curvedto.point.bottomright.up"
-        }
-    }
-
-    private func stat(title: String, value: String, unit: String) -> some View {
-        HStack(alignment: .lastTextBaseline, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title3.weight(.semibold)).monospacedDigit()
-            Text(unit).font(.caption).foregroundStyle(AppTheme.accent)
-        }
-    }
-}
-
-private struct MetricCard: View {
-    let title: String
-    let value: String
-    let unit: String
-    var caption: String? = nil
-    var isStale: Bool = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            HStack(alignment: .lastTextBaseline, spacing: 4) {
-                Text(value)
-                    .font(.title2.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(isStale ? Color.secondary : Color.primary)
-                Text(unit).font(.caption).foregroundStyle(AppTheme.accent)
-            }
-            if let caption {
-                Text(caption).font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .glassCard(cornerRadius: 16)
-    }
-}
-
 private struct StatusChipsCard: View {
     let snapshot: BmsSnapshot?
     let isStale: Bool
@@ -559,104 +420,124 @@ private struct StatusChipsCard: View {
     }
 }
 
-/// 电流滚动曲线：直接使用 Canvas 绘制，不引入图表依赖。
-private struct CurrentChartCard: View {
+/// 与行程图表相同：真实时间轴、独立连续区间与可见孤立点，不补造功率。
+enum BmsHistoryMetric: Equatable {
+    case current, power
+
+    var title: String { self == .current ? "历史电流曲线" : "历史功率曲线" }
+    var unit: String { self == .current ? "A" : "W" }
+
+    func value(in snapshot: BmsSnapshot) -> Double? {
+        let value: Double? = self == .current ? snapshot.current : snapshot.power
+        return value.flatMap { $0.isFinite ? $0 : nil }
+    }
+}
+
+struct BmsHistoryChartPoint: Identifiable, Equatable {
+    let id: Int
+    let timestamp: Date
+    let value: Double
+    let series: Int
+
+    static func makePoints(history: [BmsSnapshot], metric: BmsHistoryMetric) -> [Self] {
+        var points: [Self] = []
+        var previous: Date?
+        var series = 0
+        for (index, snapshot) in history.enumerated() {
+            guard snapshot.receivedAt.timeIntervalSinceReferenceDate.isFinite,
+                  let value = metric.value(in: snapshot) else {
+                previous = nil
+                continue
+            }
+            let interval = previous.map { snapshot.receivedAt.timeIntervalSince($0) }
+            if let interval, interval > 0, interval <= 5 {
+                // 仅递增且在历史连续性阈值内的样本共用 series。
+            } else {
+                series += 1
+            }
+            points.append(Self(id: index, timestamp: snapshot.receivedAt, value: value, series: series))
+            previous = snapshot.receivedAt
+        }
+        return points
+    }
+}
+
+private struct BmsHistoryChartCard<Accessory: View>: View {
     let history: [BmsSnapshot]
+    let metric: BmsHistoryMetric
+    let accessory: Accessory
+    @ScaledMetric(relativeTo: .body) private var chartHeight: CGFloat = 180
+
+    init(history: [BmsSnapshot], metric: BmsHistoryMetric, @ViewBuilder accessory: () -> Accessory) {
+        self.history = history
+        self.metric = metric
+        self.accessory = accessory()
+    }
 
     var body: some View {
+        let points = BmsHistoryChartPoint.makePoints(history: history, metric: metric)
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("电流曲线").font(.headline)
-                Spacer()
-                Text("最近 \(history.count) 次")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Group {
-                if history.count >= 2 {
-                    CurrentChart(samples: history.map(\.current))
-                } else {
-                    Text("等待实时数据…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 140)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text("\(metric.title) · \(metric.unit)").font(.headline)
+                    Spacer(minLength: 8)
+                    accessory
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(metric.title) · \(metric.unit)").font(.headline)
+                    accessory
                 }
             }
+            if points.isEmpty {
+                Text("等待有效\(metric == .current ? "电流" : "功率")样本…")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: chartHeight)
+            } else {
+                Chart(points) { point in
+                    LineMark(x: .value("接收时间", point.timestamp), y: .value(metric.unit, point.value),
+                             series: .value("连续区间", point.series))
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(AppTheme.accent)
+                    PointMark(x: .value("接收时间", point.timestamp), y: .value(metric.unit, point.value))
+                        .foregroundStyle(AppTheme.accent)
+                        .symbolSize(12)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) {
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.hour().minute().second())
+                    }
+                }
+                .chartXAxisLabel("接收时间")
+                .chartYAxisLabel(metric.unit)
+                .chartLegend(.hidden)
+                .frame(height: chartHeight)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(metric.title)
+                .accessibilityValue(summary(points))
+                .accessibilityIdentifier("dashboard.chart.\(metric == .current ? "current" : "power")")
+                Text(summary(points))
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Text("历史接收值；缺失/无效、非递增时间及超过 5 秒的间隙不连线，孤立样本仅显示点。")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .glassCard()
+        .padding(16)
+        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
-}
 
-private struct CurrentChart: View {
-    let samples: [Double]
-
-    var body: some View {
-        Canvas { context, size in
-            guard samples.count >= 2,
-                  let minValue = samples.min(),
-                  let maxValue = samples.max() else { return }
-            let range = max(maxValue - minValue, 0.5)
-            let inset = size.height * 0.1
-            let drawableHeight = size.height - inset * 2
-
-            var path = Path()
-            for (index, value) in samples.enumerated() {
-                let ratio = CGFloat((value - minValue) / range)
-                let x = size.width * CGFloat(index) / CGFloat(samples.count - 1)
-                let y = inset + drawableHeight * (1 - ratio)
-                if index == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-            context.stroke(path, with: .color(AppTheme.accent), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-
-            let maxLabel = Text(String(format: "%.1f A", maxValue)).font(.caption2)
-            context.draw(context.resolve(maxLabel), at: CGPoint(x: size.width - 24, y: inset + 6))
+    private func summary(_ points: [BmsHistoryChartPoint]) -> String {
+        guard let first = points.map(\.timestamp).min(), let latest = points.max(by: { $0.timestamp < $1.timestamp }),
+              let minimum = points.map(\.value).min(), let maximum = points.map(\.value).max() else {
+            return "没有有效样本"
         }
-        .frame(height: 140)
-    }
-}
-
-
-/// Historical measured power, never an amperage curve relabeled as watts.
-private struct PowerChartCard: View {
-    let history: [BmsSnapshot]
-    var body: some View {
-        let values = history.compactMap { snapshot -> Double? in
-            guard let value = snapshot.power, value.isFinite else { return nil }
-            return value
-        }
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("历史功率曲线 · W").font(.headline)
-            if values.count >= 2, let first = history.first, let last = history.last,
-               last.receivedAt > first.receivedAt {
-                Canvas { context, size in
-                    let minimum = min(values.min() ?? 0, 0)
-                    let maximum = max(values.max() ?? 0, 1)
-                    let span = max(1, maximum - minimum)
-                    let duration = last.receivedAt.timeIntervalSince(first.receivedAt)
-                    var path = Path()
-                    var previous: Date?
-                    for sample in history {
-                        guard let power = sample.power, power.isFinite else { previous = nil; continue }
-                        let point = CGPoint(x: size.width * sample.receivedAt.timeIntervalSince(first.receivedAt) / duration,
-                                            y: size.height * (1 - (power - minimum) / span))
-                        if let previous, sample.receivedAt > previous,
-                           sample.receivedAt.timeIntervalSince(previous) <= 5 { path.addLine(to: point) }
-                        else { path.move(to: point) }
-                        previous = sample.receivedAt
-                    }
-                    context.stroke(path, with: .color(AppTheme.accent), lineWidth: 2)
-                }.frame(height: 140)
-                Text(String(format: "%.0f – %.0f W", values.min() ?? 0, values.max() ?? 0))
-                    .font(.caption).monospacedDigit()
-                Text("按接收时间绘制历史值；缺失功率和超过 5 秒的间隙不连线。")
-                    .font(.caption2).foregroundStyle(.secondary)
-            } else { Text("等待有效功率样本…").foregroundStyle(.secondary).frame(minHeight: 140) }
-        }.frame(maxWidth: .infinity, alignment: .leading).padding().glassCard()
+        let format = Date.FormatStyle.dateTime.hour().minute().second()
+        let precision = metric == .current ? 1 : 0
+        let range = String(format: "%.*f–%.*f %@", precision, minimum, precision, maximum, metric.unit)
+        let lastValue = String(format: "%.*f %@", precision, latest.value, metric.unit)
+        let breaks = max(0, Set(points.map(\.series)).count - 1)
+        return "\(first.formatted(format))–\(latest.timestamp.formatted(format))；\(points.count) 个有效样本；范围 \(range)；末次 \(lastValue)；\(breaks) 处断线，\(history.count - points.count) 个缺失或无效样本。"
     }
 }

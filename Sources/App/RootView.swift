@@ -7,7 +7,6 @@ struct RootView: View {
         case devices
         case detail
         case trips
-        case range
         case settings
     }
 
@@ -22,8 +21,9 @@ struct RootView: View {
     @State private var selection: Tab = .dashboard
 
     var body: some View {
+        // 保持五个固定标签；第六个标签会触发 iPhone 系统 More，不能靠改文案消除。
         TabView(selection: $selection) {
-            DashboardView(goToDeviceSelection: { selection = .devices })
+            DashboardView()
                 .tabItem { Label("仪表盘", systemImage: "speedometer") }
                 .tag(Tab.dashboard)
             DeviceView()
@@ -35,9 +35,6 @@ struct RootView: View {
             TripHistoryView()
                 .tabItem { Label("行程", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
                 .tag(Tab.trips)
-            NavigationStack { RangeView() }
-                .tabItem { Label("续航", systemImage: "gauge.with.dots.needle.33percent") }
-                .tag(Tab.range)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(Tab.settings)

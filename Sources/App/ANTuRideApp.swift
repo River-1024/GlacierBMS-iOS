@@ -17,22 +17,48 @@ struct ANTuRideApp: App {
         // 日志系统必须最先安装：后续所有启动逻辑都应留下痕迹。
         AppLogBootstrap.install()
         // 服务在同一处构造并共享实例：行程会话直接引用 BMS 与定位服务。
-        let driving = DrivingSettingsStore()
+        let defaults = Self.settingsDefaults()
+        let driving = DrivingSettingsStore(defaults: defaults)
         let controller = ControllerBluetoothService(startupAutoConnectEnabled: driving.settings.controllerAutoConnectEnabled)
         _controllerService = StateObject(wrappedValue: controller)
         _accelerationService = StateObject(wrappedValue: AccelerationService(controller: controller))
         _drivingSettings = StateObject(wrappedValue: driving)
-        let bms = BmsBluetoothService(startupAutoConnectEnabled: driving.settings.bmsAutoConnectEnabled,
+        let bms = BmsBluetoothService(defaults: defaults, startupAutoConnectEnabled: driving.settings.bmsAutoConnectEnabled,
                                       queryIntervalMs: driving.settings.bluetoothRefreshIntervalMs)
         let location = LocationService()
         _bmsService = StateObject(wrappedValue: bms)
         _locationService = StateObject(wrappedValue: location)
         let trip = TripSessionService(locationService: location, bmsService: bms, store: Self.tripStore())
         _tripSession = StateObject(wrappedValue: trip)
-        let range = RangeService(bms: bms, location: location)
+        let range = RangeService(bms: bms, location: location, defaults: defaults)
         // 仅生产组合根应用 15min/10s 默认；独立服务测试保留 5min/即时刷新契约。
         range.applyDrivingSettings(driving.settings)
         _rangeService = StateObject(wrappedValue: range)
+    }
+
+    private static func settingsDefaults() -> UserDefaults {
+        #if DEBUG
+        // UI 回归只操作隔离套件，不改用户驾驶配置、真实设备 UUID 或电池容量。
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-settings-seeded") {
+            guard let defaults = UserDefaults(suiteName: "UITest-Settings-\(UUID().uuidString)") else {
+                preconditionFailure("无法创建 UI 测试设置套件")
+            }
+            var settings = DrivingSettings.defaults
+            settings.rangeWindowMinutes = 30
+            settings.rangeRefreshSeconds = 45
+            settings.appThemeMode = .dark
+            settings.bluetoothRefreshIntervalMs = 250
+            settings.bmsAutoConnectEnabled = false
+            settings.controllerAutoConnectEnabled = false
+            do {
+                defaults.set(try JSONEncoder().encode(settings), forKey: DrivingSettingsStore.key)
+            } catch {
+                preconditionFailure("无法写入 UI 测试设置：\(error)")
+            }
+            return defaults
+        }
+        #endif
+        return .standard
     }
 
     private static func tripStore() -> TripStore {

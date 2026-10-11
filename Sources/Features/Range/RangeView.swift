@@ -45,15 +45,15 @@ struct RangeView: View {
                 }
             }
             Section {
-                NavigationLink {
-                    RangeSettingsView()
-                } label: {
-                    Label("窗口、容量与重置", systemImage: "battery.100")
-                }
+                LabeledContent("额定容量", value: range.nominalCapacityAh > 0
+                    ? String(format: "%.1f Ah", range.nominalCapacityAh) : "尚未设置")
+                Text(range.deviceID?.uuidString ?? "未绑定稳定设备 ID；不能以设备名称隔离电池设置。")
+                    .font(.caption)
+                    .textSelection(.enabled)
             } header: {
                 Text("当前设备")
             } footer: {
-                Text(range.deviceID?.uuidString ?? "未绑定稳定设备 ID；不能以设备名称隔离电池设置。")
+                Text("修改窗口、刷新、设备容量或重置，请前往「设置 → 综合续航设置」。本页仅查看结果与导出。")
             }
             Section {
                 Button("生成 JSON") { generateJSON() }

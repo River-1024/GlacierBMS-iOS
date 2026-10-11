@@ -6,3 +6,4 @@ Support/Info.plist
 *.xcuserstate
 xcuserdata/
 .workbuddy/
+.playwright-mcp/

@@ -261,3 +261,121 @@
 - 下载后ZIP CRC、Assets.car、PrivacyInfo.xcprivacy、图标、Bundle ID和显示名核验通过；无embedded.mobileprovision及_CodeSignature。
 - build/ci/5bd1493/保存run.json、ci.log和artifact-verification.json；生成物不入Git。
 - unsigned IPA仍需签名后安装；不代表真实iPhone/BMS/控制器或车辆加速验收。地图轨迹、Live Activity/CarPlay仍未实现。
+
+### 步骤031：用户确认安装成功（北京时间 2026-10-11 11:00:21 +08:00）
+
+## 本批安装进度更新（北京时间 2026-10-11 11:00:21 +08:00）
+
+- 用户在当前对话明确反馈：**安装成功**。本批交付的安装环节标记为用户确认通过，接续源码5bd1493 / GitHub Actions Run 38106226167的IPA交付记录。
+- 记录时间为本次反馈登记时间，不推断实际安装时间、签名方式、设备型号或系统版本；GitHub原始产物仍为unsigned，不因安装反馈改写产物属性。
+- 已完成：功能批次提交与推送、GitHub原生编译测试、IPA产出与本地核验、用户确认安装成功。
+- 待验收：本批首页/驾驶设置交互、续航与行程记录/导出、控制器真实链路与导出、后台/锁屏行为、RPM加速车辆测试。安装成功不等于上述功能全部通过。
+- 加速范围保持RPM单渠道、默认系数0.0782；地图轨迹、Live Activity/CarPlay仍未实现。
+
+### 步骤032：设置总入口与续航重复项整理（北京时间 2026-10-11 11:31:48 +08:00）
+
+- 用户要求：最后 More 标签变成设置，设置集中，续航不重复编辑，并对照 Android 功能。
+- 定位：RootView 原有六标签导致系统折叠；DrivingSettingsView 与 RangeSettingsView 编辑同一份窗口/刷新；设置页先进入续航结果页后再进入设置，且两页重复导出。
+- 改动：固定五标签、设置直达分类配置；续航结果与导出转到仪表盘入口，续航设置只保留一处编辑。清除窗口/重置容量文案明确真实作用域，不冒充安卓版学习重置。
+- 配置安全：持久化 key 与模型不变；驾驶页范围限定保存/重置保留最新续航字段及独立数据；续航独立恢复默认带确认。日志默认等级按钮改为与构建默认比较，不再始终禁用。
+- 文件：Sources/App/{RootView,ANTuRideApp}.swift、Features/Dashboard/DashboardView.swift、Features/Settings/{SettingsView,DrivingSettingsView,RangeSettingsView}.swift、Features/Range/RangeView.swift、Tests/AppTests/DrivingSettingsStoreTests.swift、Tests/UITests/ANTuRideUITests.swift、scripts/check_settings_contract.py、.github/workflows/build.yml。
+- Android 对照：父工程只读，23 个共用配置默认值一致；窗口 3–60 分钟、刷新 10–60 秒、BMS 查询 100–60000 ms 一致。保留 iOS 严格拒绝非法输入。屏幕方向锁和 Android 专用入口未移植；不扩展既定不学习/不做完整分析包的范围。
+- 验证：源码契约检查 6/6 通过（先复现 4 个导航/重复项失败，再整改通过）；git diff --check 通过。新增 App 测试 4 项、UI 测试 4 项尚未运行；Windows 无 Swift/Xcode，不等同编译、模拟器或真机通过。
+- 独立审查未发现确定业务回归；补充续航局部恢复的保存/服务应用与确认/取消回归，以及实际横竖屏尺寸等待。UI 种子仅在 DEBUG 隔离设置套件使用，双自动连接关闭，不修改真实配置。
+- 本批为未提交源码；没有推送或新 IPA，前批安装成功仍仅指前批产物。保留本轮开始前四份文档的未提交安装记录，父工程 tools 下无关未跟踪文件未改动。
+- 入口/完整对照及剩余差异见 docs/IOS_ANDROID_PARITY_AUDIT.md 的“设置入口整理与安卓版对照”节；下一验证是本批 macOS 编译、XCTest/UI 测试和 iPhone 横竖屏设置操作。
+
+## 步骤 033：首页层级、行程入口与 Swift Charts 需求确认（北京时间 2026-10-11 13:11:19 +08:00）
+
+- 记录性质：用户已确认目标方案；本步骤完成文档施工，不代表目标 UI 已实现或通过验收。
+- 用户确认：移除首页“安途”标题及顶部空白、独立 BMS 状态卡和首页行程控制；参数尽量填满首页可用区域；行程控制与当前会话移入行程 Tab；Dashboard 图表改用 Swift Charts；滚动内容获得导航栏区域的全屏视觉。其余 UI 自适应、字号、原生组件与无障碍约束继续有效。
+
+### 已施工与当前只读核对
+
+- 本轮已施工：仅向 `docs/CONSTRUCTION_LOG.md`、`docs/MIGRATION_PLAN.md`、`design-system/anturide-ios/MASTER.md` 追加需求、进度与验证边界；保留已有历史和未提交改动。
+- 已有代码基础（只读核对，不视为本轮实现）：五项顶层 Tab、首页可配置参数布局、行程列表/详情已存在；行程详情图表已使用 Swift Charts。
+- 本轮目标仍待施工：当前 `DashboardView` 仍含“安途”导航标题、`ConnectionStatusCard`、`TripControlCard` 和 Canvas 电流/功率曲线；行程开始/结束控制仍在首页。行程详情使用 Charts 不等于 Dashboard 已迁移。此处仅是记录时的源码快照，不替其他施工线程作完成结论。
+
+### 待施工与待验证
+
+- 待施工：按用户确认重排 Dashboard，移除标题留白、BMS 状态卡和首页行程控制；行程 Tab 接入开始/结束、当前会话和错误反馈；Dashboard 业务曲线迁移至 Swift Charts；实现导航栏区域的全屏滚动视觉。
+- 参数填满以合理利用空间为目标，不用缩小字号、固定尺寸或压缩触控区域换取密度；仍须支持小屏/横屏、Dynamic Type、VoiceOver、浅色/深色与减少动态效果。全屏视觉不允许内容或操作被系统安全区域/导航控件遮挡。
+- Windows 静态检查：本轮只做文档内容、追加完整性和差异空白检查；源码仅只读查看，未运行 Swift 编译或测试。
+- macOS CI/模拟器：待针对完成后的准确源码提交执行编译、XCTest/XCUITest、图表与布局回归；本轮未运行，不声称通过。
+- 真机/BMS/车辆：待验收真实 iPhone 滚动与导航、行程开始/结束及数据新鲜度/断连行为；本轮未进行，不声称通过。旧 CI 和既往安装成功不能作为本轮方案的验收证据。
+
+### 未修改范围
+
+- 本轮未改 `Sources/`、`Tests/` 或其他文件，不改 BMS/BLE 协议、参数与行程存储格式，不回退其他人的改动；未提交、推送或生成新 IPA。
+- 五项 Tab、系统返回手势、iOS 16 最低版本、语义主题、原生组件、44pt 触控、缺失/过期值不冒充零值及现有本机隐私边界继续有效；RPM 加速仍为 RPM-only。
+- 完成标准：三份文档准确追加决策与状态，并验证写入范围和历史保留；UI 施工与 macOS/真机验收不属于本次文档交付。
+
+## 步骤 034：Dashboard 根页导航栏与续航入口决定补充（北京时间 2026-10-11 13:16:49 +08:00）
+
+- 用户明确决定：Dashboard 根页隐藏整条 `navigationBar`，仅隐藏导航栏背景不足以消除顶部空白；根页无标题、无固定 header，也不以空白占位保留导航栏高度。此决定补充步骤 033，并取代其中对根页工具栏保留的宽泛表述。
+- 续航详情入口放入现有卡片或图表标题行的内容区，随内容滚动，不额外占据顶部一行；打开详情后恢复系统导航栏与原生返回按钮/手势，根页隐藏范围不得泄漏到详情。
+- `ScrollView` 连续滚动到顶部安全区，不留导航栏占位；仍尊重状态栏/刘海和底部五项 Tab 的安全区域及交互，不用固定 header 或额外顶行替代导航栏。
+- 旧 `dashboard-wireframe.svg` / `dashboard-wireframe.png` 已被本次决定替代，仅作为历史方案留存，不再作为当前施工或验收依据；该声明同步追加至 MASTER，未编辑或删除线框图文件。
+- 已施工：仅追加三份指定文档，未修改源码或测试；本条记录产品决定，不宣称 UI 已实现。既有首页减项、行程移入行程 Tab、Swift Charts、自适应/字号/原生组件与无障碍约束继续有效。
+- 待验证：Windows 仅执行文档追加完整性与差异检查；完成 UI 施工后，macOS CI/模拟器需验证根页整栏隐藏、内容区入口、详情恢复导航、返回根页与旋转布局；真实 iPhone/BMS 验收需确认安全区域、滚动、五 Tab 及续航真实数据状态。本次未运行编译、测试或真机/BMS 验收。
+- 未修改范围：`Sources/`、`Tests/`、线框图和其余文件；不回退其他未提交改动，不提交/推送或生成新 IPA。
+
+## 步骤 035：旧顶部续航 toolbar 方案替代与文档交付边界（北京时间 2026-10-11 13:21:11 +08:00）
+
+本条承接步骤 034，明确第一版旧方案与最新决定的关系，不改写历史。
+
+- 旧版“保留 Dashboard 顶部续航 toolbar”的方案已被替代，不再作为当前施工依据：Dashboard 根页隐藏整条 `navigationBar`，不是仅隐藏背景；无标题、无固定 header、无导航栏高度占位。
+- 续航详情入口移到现有卡片/图表标题行的内容区，随内容滚动，不额外占顶端一行；详情页恢复系统导航栏、返回按钮及返回手势，隐藏范围只限 Dashboard 根页。
+- `ScrollView` 连续滚动到顶部安全区，仍尊重状态栏/刘海与底部五 Tab；其余自适应、字号、原生组件、Swift Charts 和无障碍约束继续。
+- 旧 `dashboard-wireframe.svg` / `dashboard-wireframe.png` 仅为被本次决定替代的历史示意，不作当前施工或验收依据，不据旧图恢复顶部 toolbar、标题或固定 header；图文件保持不变。
+- 本次已完成需求文档补写，不等待源码实施。实施完成后的实际验证由用户后续追加；本轮仅验证文档，不推断实现状态，不声称 Windows 静态检查等于 macOS CI/模拟器或真机/BMS 通过。未修改源代码、测试或其他文件，保留其他未提交改动。
+
+
+## 步骤 036：Dashboard 减项、行程归位与 Swift Charts 施工（北京时间 2026-10-11 14:05:05 +08:00）
+
+本步骤按用户最新确认实施，源码和测试已修改；文档中的步骤 033–035 保留为需求决策历史，不再作为“尚未施工”的当前状态。
+
+### 已施工
+
+- `Sources/Features/Dashboard/DashboardView.swift`
+  - 移除 Dashboard 根页“安途”标题、导航栏占位、独立 BMS 连接状态卡和首页行程控制卡。
+  - 根页使用 `.toolbar(.hidden, for: .navigationBar)`；没有用 `.ignoresSafeArea()` 覆盖状态栏/刘海，内容仍使用单一 `ScrollView` 连续滚动。
+  - 续航入口移入首个参数卡的内容区；进入 `RangeView` 时恢复系统导航栏，返回根页再次隐藏。
+  - 保留首页槽位配置与 27 个默认槽位；横屏、Dynamic Type、用户字号比例较大时自动减少列数/改为单列，取消主要布局对固定宽高的依赖。
+  - 电流/功率业务曲线从 `Canvas` 迁移到 iOS 16 Swift Charts `Chart`/`LineMark`/`PointMark`，保留真实电流与真实功率语义、单位、接收时间轴、样本摘要、断点和无效数据处理。
+- `Sources/Features/Trips/TripHistoryView.swift`
+  - 在“行程”Tab 顶部增加当前行程会话区，承载开始/结束、暂停状态、实时里程/净能耗、错误和待保存恢复入口。
+  - 继续使用共享 `TripSessionService`，未复制或改变锁屏、分段、保存和导出语义；新增稳定标识 `trip-session.card/start/stop`。
+- `Sources/App/RootView.swift`
+  - 保持五项顶层 Tab，仅将 Dashboard 初始化改为无设备跳转参数，设备连接仍由“设备”Tab承载。
+- 回归覆盖
+  - `Tests/UITests/ANTuRideUITests.swift` 增加 Dashboard 无标题/无行程按钮、行程 Tab 有开始按钮、横屏最大字号可滚动到底部参数的 UI 契约。
+  - `Tests/AppTests/BmsHistoryChartTests.swift` 增加曲线点生成测试：真实零值/负功率、缺失/非有限值、5 秒断点边界、乱序时间、单点/空数据及电流功率语义隔离。
+  - `scripts/check_dashboard_contract.py` 增加源码级 Dashboard 约束检查，不替代 Xcode 编译或 UI 运行。
+  - `design-system/anturide-ios/pages/dashboard.md` 写入页面级施工和验收约束。
+
+### 当前验证证据
+
+- Tree-sitter Swift 语法解析：`Sources/` 与 `Tests/` 全部通过，未发现语法错误。
+- `python scripts/check_settings_contract.py`：6/6 通过。
+- `python scripts/check_dashboard_contract.py`：6/6 通过。
+- `git diff --check`：通过；未执行清理、回退或提交。
+
+### 尚未验证 / 风险边界
+
+- 当前 Windows 工作区没有 Swift/Xcode/XcodeGen，未运行 `swift test`、Xcode 类型检查、XCTest 或 XCUITest；新增 AppTests/UITests 仍需 macOS CI/模拟器执行。
+- 需要在 macOS 模拟器验证 `.toolbar(.hidden)` 的真实导航栏占位是否消失、打开续航详情后的导航恢复、返回根页、375pt/横屏/最大 Dynamic Type 及图表渲染。
+- 需要在真机验证状态栏/刘海、底部 Tab、VoiceOver、减少动态效果、真实 BMS 断连/过期数据和行程开始/结束；既往 CI/安装成功不覆盖本步骤。
+- 未提交、未推送、未生成新 IPA；工作区其它未提交改动保持不变。
+
+
+## 步骤 037：全部项目改动提交与 macOS IPA 构建启动（北京时间 2026-10-11 14:23:36 +08:00）
+
+- 用户明确授权：提交本 iOS 项目全部改动、构建 IPA，并将进度写入文档；本步骤覆盖此前“未提交、未推送、未生成新 IPA”的交付边界。
+- 范围：现有设置入口整理、五 Tab、Dashboard/行程 UI、Swift Charts、相关测试、项目设计约束及文档，保留所有前序改动；不修改 Android 父仓库。
+- 构建补充：将 Dashboard 源码契约加入既有 macOS CI，与设置源码契约、SwiftPM、XCTest/XCUITest、Release 无签名设备构建及资源包校验顺序执行。
+- 生成物边界：`.playwright-mcp/` 为本地浏览器 404 控制台日志，加入忽略并保留本地；`build/` 下 CI 日志、IPA 和校验结果不提交。未删除用户文件。
+- 本地验证、准确源码 SHA、GitHub Run 和产物结果将在后续步骤追加；Windows 无 Xcode，不声称本机编译通过。
+- 预定交付：当前分支提交推送后显式触发 workflow_dispatch，只有准确源码 SHA 的全部 CI 检查成功并下载校验 IPA 后才标记构建交付完成；真机/BMS/车辆验收仍单独待验证。
+
+- 提交前本地证据：设置契约 6/6、Dashboard 契约 6/6、Tree-sitter Swift 72 文件零语法错误、`git diff --check` 通过；24 个项目改动文件的常见凭据模式扫描零发现。以上仅为静态检查，不替代 Xcode/模拟器。

@@ -44,6 +44,140 @@ final class DrivingSettingsStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSavingStaleDrivingDraftPreservesLatestRangeSettings() throws {
+        try withDefaults { defaults in
+            let store = DrivingSettingsStore(defaults: defaults)
+            var staleDraft = store.settings
+            staleDraft.appThemeMode = .dark
+            staleDraft.bluetoothRefreshIntervalMs = 250
+            staleDraft.controllerAutoConnectEnabled = false
+            var rangeUpdate = store.settings
+            rangeUpdate.rangeWindowMinutes = 30
+            rangeUpdate.rangeRefreshSeconds = 45
+            try store.save(rangeUpdate)
+
+            try store.saveDrivingPreferences(staleDraft)
+
+            var expected = staleDraft
+            expected.rangeWindowMinutes = 30
+            expected.rangeRefreshSeconds = 45
+            XCTAssertEqual(store.settings, expected)
+            XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, expected)
+        }
+    }
+
+    @MainActor
+    func testRestoreDrivingPreferencesKeepsRangeHomeUUIDCapacityAndHistory() throws {
+        try withDefaults { defaults in
+            let id = UUID()
+            let capacityKey = "com.zjsf.anturide.range.capacity.\(id.uuidString)"
+            defaults.set(id.uuidString, forKey: BmsBluetoothService.rememberedDeviceDefaultsKey)
+            defaults.set(100.0, forKey: capacityKey)
+            defaults.set(Data([1, 2, 3]), forKey: "history.sentinel")
+            let homeLayout = try XCTUnwrap(HomeParameterPrefs.encode(.androidDefault))
+            defaults.set(homeLayout, forKey: HomeParameterPrefs.key)
+            let store = DrivingSettingsStore(defaults: defaults)
+            var changed = store.settings
+            changed.rangeWindowMinutes = 30
+            changed.rangeRefreshSeconds = 45
+            changed.appThemeMode = .dark
+            changed.valueScale = 1.4
+            changed.bluetoothRefreshIntervalMs = 250
+            changed.bmsAutoConnectEnabled = false
+            changed.controllerAutoConnectEnabled = false
+            try store.save(changed)
+
+            try store.restoreDrivingPreferencesDefaults()
+
+            var expected = DrivingSettings.defaults
+            expected.rangeWindowMinutes = 30
+            expected.rangeRefreshSeconds = 45
+            XCTAssertEqual(store.settings, expected)
+            XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, expected)
+            XCTAssertEqual(defaults.string(forKey: BmsBluetoothService.rememberedDeviceDefaultsKey), id.uuidString)
+            XCTAssertEqual(defaults.double(forKey: capacityKey), 100)
+            XCTAssertEqual(defaults.data(forKey: "history.sentinel"), Data([1, 2, 3]))
+            XCTAssertEqual(defaults.string(forKey: HomeParameterPrefs.key), homeLayout)
+        }
+    }
+
+    @MainActor
+    func testRestoringRangeCadenceKeepsDrivingDeviceDataAndAppliesService() throws {
+        try withDefaults { defaults in
+            let id = UUID()
+            let capacityKey = "com.zjsf.anturide.range.capacity.\(id.uuidString)"
+            defaults.set(id.uuidString, forKey: BmsBluetoothService.rememberedDeviceDefaultsKey)
+            defaults.set(112.0, forKey: capacityKey)
+            defaults.set(Data([4, 5, 6]), forKey: "history.sentinel")
+            let homeLayout = try XCTUnwrap(HomeParameterPrefs.encode(.androidDefault))
+            defaults.set(homeLayout, forKey: HomeParameterPrefs.key)
+            let store = DrivingSettingsStore(defaults: defaults)
+            var original = store.settings
+            original.rangeWindowMinutes = 30
+            original.rangeRefreshSeconds = 45
+            original.appThemeMode = .dark
+            original.bluetoothRefreshIntervalMs = 250
+            original.valueScale = 1.4
+            original.bmsAutoConnectEnabled = false
+            original.controllerAutoConnectEnabled = false
+            try store.save(original)
+            let service = RangeService(defaults: defaults)
+            service.setDeviceID(id)
+            let subscription = store.$settings.sink { service.applyDrivingSettings($0) }
+            XCTAssertEqual(service.windowAge, 1800)
+            XCTAssertEqual(service.predictionRefreshInterval, 45)
+
+            try store.saveRangePreferences(windowMinutes: DrivingSettings.defaults.rangeWindowMinutes,
+                                           refreshSeconds: DrivingSettings.defaults.rangeRefreshSeconds)
+
+            var expected = original
+            expected.rangeWindowMinutes = 15
+            expected.rangeRefreshSeconds = 10
+            XCTAssertEqual(store.settings, expected)
+            XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, expected)
+            XCTAssertEqual(service.windowAge, 900)
+            XCTAssertEqual(service.predictionRefreshInterval, 10)
+            XCTAssertEqual(service.nominalCapacityAh, 112)
+            XCTAssertEqual(service.deviceID, id)
+            XCTAssertEqual(defaults.string(forKey: BmsBluetoothService.rememberedDeviceDefaultsKey), id.uuidString)
+            XCTAssertEqual(defaults.double(forKey: capacityKey), 112)
+            XCTAssertEqual(defaults.data(forKey: "history.sentinel"), Data([4, 5, 6]))
+            XCTAssertEqual(defaults.string(forKey: HomeParameterPrefs.key), homeLayout)
+            withExtendedLifetime(subscription) {}
+        }
+    }
+
+    @MainActor
+    func testInvalidDrivingPreferencesDoNotWriteOrPublish() throws {
+        try withDefaults { defaults in
+            let store = DrivingSettingsStore(defaults: defaults)
+            var saved = store.settings
+            saved.rangeWindowMinutes = 30
+            saved.rangeRefreshSeconds = 45
+            try store.save(saved)
+            let before = defaults.data(forKey: DrivingSettingsStore.key)
+            let noticeBefore = store.notice
+            var settingsEvents = 0
+            var noticeEvents = 0
+            let settingsSubscription = store.$settings.dropFirst().sink { _ in settingsEvents += 1 }
+            let noticeSubscription = store.$notice.dropFirst().sink { _ in noticeEvents += 1 }
+            var invalidDisplay = saved
+            invalidDisplay.tempYellowUpperC = -100
+            var invalidRange = saved
+            invalidRange.rangeWindowMinutes = 1
+            for invalid in [invalidDisplay, invalidRange] {
+                XCTAssertThrowsError(try store.saveDrivingPreferences(invalid))
+                XCTAssertEqual(defaults.data(forKey: DrivingSettingsStore.key), before)
+                XCTAssertEqual(store.settings, saved)
+                XCTAssertEqual(store.notice, noticeBefore)
+                XCTAssertEqual(settingsEvents, 0)
+                XCTAssertEqual(noticeEvents, 0)
+            }
+            withExtendedLifetime((settingsSubscription, noticeSubscription)) {}
+        }
+    }
+
+    @MainActor
     func testCorruptWrongTypeAndOutOfRangeLoadPreserveOriginalStorage() throws {
         try withDefaults { defaults in
             let corrupt = Data("not JSON".utf8)

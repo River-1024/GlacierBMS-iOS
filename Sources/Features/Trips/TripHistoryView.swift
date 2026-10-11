@@ -2,7 +2,8 @@ import ANTuRideDomain
 import Charts
 import SwiftUI
 
-/// 本地保存的行程；未结束会话只在仪表盘显示，重启后的检查点明确标记为未完成。
+/// 当前会话与本地保存的行程；重启后的检查点明确标记为未完成。
+@MainActor
 struct TripHistoryView: View {
     @EnvironmentObject private var tripSession: TripSessionService
     @State private var pendingDeletion: [UUID] = []
@@ -10,24 +11,37 @@ struct TripHistoryView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let error = tripSession.historyError, tripSession.savedTrips.isEmpty {
-                    VStack(spacing: 12) {
+            List {
+                Section("当前行程") {
+                    TripSessionCard()
+                }
+                if let trip = tripSession.pendingSaveTrip {
+                    Section("待保存行程") {
+                        Text("上一段行程尚未保存，重试保存或查看详情导出后再开始新行程。")
+                            .font(.footnote).foregroundStyle(AppTheme.warning)
+                        Button("重试保存") { tripSession.retryPendingSave() }
+                            .frame(minHeight: 44)
+                        NavigationLink("查看待保存行程") { TripDetailView(trip: trip) }
+                    }
+                }
+                if let error = tripSession.historyError {
+                    Section("读取失败") {
                         Text(error).foregroundStyle(AppTheme.danger)
                         Button("重新读取") { tripSession.reloadHistory() }
-                    }.padding()
-                } else if tripSession.savedTrips.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                            .font(.largeTitle).foregroundStyle(AppTheme.accent)
-                        Text("暂无行程").font(.title3.weight(.semibold))
-                        Text("在仪表盘开始并结束一次行程后，可在这里查看记录。")
-                            .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            .frame(minHeight: 44)
                     }
-                    .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityIdentifier("trip-history-empty")
-                } else {
-                    List {
+                }
+                Section("已保存行程") {
+                    if tripSession.savedTrips.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("暂无行程", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                                .font(.headline)
+                            Text("在本页顶部开始并结束一次行程后，可在这里查看记录。")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                        .accessibilityIdentifier("trip-history-empty")
+                    } else {
                         ForEach(tripSession.savedTrips, id: \.id) { trip in
                             NavigationLink {
                                 TripDetailView(trip: trip)
@@ -41,9 +55,9 @@ struct TripHistoryView: View {
                             showingDeletion = true
                         }
                     }
-                    .listStyle(.insetGrouped)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("行程")
             .toolbar {
                 if !tripSession.savedTrips.isEmpty { EditButton() }
@@ -55,24 +69,83 @@ struct TripHistoryView: View {
                 }
                 Button("取消", role: .cancel) { pendingDeletion = [] }
             }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 8) {
-                    if let error = tripSession.historyError ?? tripSession.lastError {
-                        Text(error).font(.footnote).foregroundStyle(AppTheme.danger)
-                    }
-                    if let trip = tripSession.pendingSaveTrip {
-                        HStack {
-                            Button("重试保存") { tripSession.retryPendingSave() }
-                            Spacer()
-                            NavigationLink("查看待保存行程") { TripDetailView(trip: trip) }
-                        }.font(.footnote)
-                    }
+        }
+    }
+}
+
+/// 仅读取共享服务并转发按钮事件；切换 Tab 不启停会话、不改变锁屏或保存语义。
+@MainActor
+private struct TripSessionCard: View {
+    @EnvironmentObject private var tripSession: TripSessionService
+
+    private var isActive: Bool { tripSession.state == .recording || tripSession.state == .suspended }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    status
+                    Spacer(minLength: 8)
+                    sessionAction
                 }
-                .padding().frame(maxWidth: .infinity).background(AppTheme.background)
+                VStack(alignment: .leading, spacing: 8) {
+                    status
+                    sessionAction
+                }
             }
+            if isActive {
+                LabeledContent("已记录里程", value: TripFormatters.distance(tripSession.liveDistanceMeters,
+                    locationCount: tripSession.liveSegments.reduce(0) { $0 + $1.locationCount }))
+                LabeledContent("已记录净能耗", value: TripFormatters.energy(tripSession.liveEnergyWh,
+                    sampleCount: tripSession.liveSegments.reduce(0) { $0 + $1.energySampleCount }))
+                Text("锁屏按现有规则暂停并标记区间；暂停和数据缺口不补算里程或能耗。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("开始行程后记录 GPS 速度、里程与 BMS 能耗；没有有效采样的指标显示 --，不是零。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = tripSession.lastError {
+                Text(error).font(.footnote).foregroundStyle(AppTheme.danger)
+            }
+        }
+        .monospacedDigit()
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("trip-session.card")
+    }
+
+    private var status: some View {
+        Label(statusText, systemImage: tripSession.state == .suspended ? "lock" : isActive ? "record.circle" : "point.topleft.down.to.point.bottomright.curvepath")
+            .font(.headline)
+            .foregroundStyle(tripSession.state == .suspended ? AppTheme.warning : AppTheme.accent)
+    }
+
+    private var statusText: String {
+        switch tripSession.state {
+        case .idle: return "尚未开始行程"
+        case .recording: return "行程记录中"
+        case .suspended: return "已暂停（锁屏）"
+        case .finished: return "行程已结束"
         }
     }
 
+    @ViewBuilder
+    private var sessionAction: some View {
+        if isActive {
+            Button { tripSession.stopTrip() } label: {
+                Text("结束行程").frame(minWidth: 44, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("trip-session.stop")
+        } else if tripSession.state == .idle {
+            Button { tripSession.startTrip() } label: {
+                Text("开始行程").frame(minWidth: 44, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(tripSession.pendingSaveTrip != nil)
+            .accessibilityIdentifier("trip-session.start")
+        }
+    }
 }
 
 private struct TripRow: View {

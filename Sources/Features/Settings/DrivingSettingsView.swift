@@ -58,12 +58,36 @@ final class DrivingSettingsStore: ObservableObject {
         notice = "已保存到本机。主题、BMS 查询周期和续航配置由 App 消费；控制器启动连接策略已接线，关闭/打开开关不触发即时连接。"
     }
 
+    /// 驾驶页只覆盖驾驶与显示偏好；旧草稿不能回写续航页后来保存的窗口/刷新。
+    /// 先校验完整候选值，非法输入不写入，也不发布 settings/notice。
+    func saveDrivingPreferences(_ candidate: DrivingSettings) throws {
+        try candidate.validate()
+        var saved = candidate
+        saved.rangeWindowMinutes = settings.rangeWindowMinutes
+        saved.rangeRefreshSeconds = settings.rangeRefreshSeconds
+        try save(saved)
+    }
+
+    /// 续航页只覆盖两个全局周期字段，始终基于最新快照保留驾驶与显示偏好。
+    func saveRangePreferences(windowMinutes: Int, refreshSeconds: Int) throws {
+        var candidate = settings
+        candidate.rangeWindowMinutes = windowMinutes
+        candidate.rangeRefreshSeconds = refreshSeconds
+        try save(candidate)
+    }
+
+    /// 局部恢复不改变续航窗口/刷新，也不触碰首页布局、外设 UUID、设备容量或历史。
+    func restoreDrivingPreferencesDefaults() throws {
+        try saveDrivingPreferences(.defaults)
+    }
+
+    /// 保留全量恢复契约，供需要重置所有 DrivingSettings 的调用方使用。
     func restoreDefaults() throws { try save(.defaults) }
 }
 
-/// 普通驾驶偏好的草稿页面。未保存的输入不写 UserDefaults；返回页面不会隐式保存。
+/// 驾驶与显示偏好的草稿页面。未保存的输入不写 UserDefaults；返回页面不会隐式保存。
 /// 接入示例（主线程）：DrivingSettingsView(store: store) { settings in /* 应用偏好 */ }
-/// App/Root 已消费主题、BMS 查询/启动策略及续航窗口/刷新；
+/// App/Root 已消费主题、BMS 查询/启动策略；续航窗口/刷新仅在 RangeSettingsView 编辑。
 /// 字号/描述/功率图/阈值/探头选择由 Dashboard 单独消费，控制器启动连接策略已接线，关闭/打开开关不触发即时连接。
 /// 控制器采样周期不属于本页。
 /// 横竖屏锁需要 UIApplication/scene 方向策略，故不提供伪有效的开关。
@@ -91,16 +115,16 @@ struct DrivingSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("本页不写 BMS 或控制器配置。App 已接入主题、BMS 查询周期与续航配置；其余设置应以消费端接线为准，保存不代表设备连接成功。")
+                Text("本页管理驾驶与显示偏好，不写 BMS 或控制器硬件配置。App 已接入主题、BMS 查询与启动连接策略；续航窗口和刷新请在续航设置中编辑。保存不代表设备连接成功。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Section {
                 ForEach(Self.cadenceFields) { numericRow($0) }
             } header: {
-                Text("续航与 BMS 查询")
+                Text("BMS 查询采样")
             } footer: {
-                Text("续航窗口 3–60 分钟，刷新 10–60 秒；BMS 查询 100–60000 ms。控制器独立查询周期不在此修改。")
+                Text("BMS 查询周期 100–60000 ms。控制器独立查询周期不在此修改；续航窗口和刷新仅在续航设置中编辑。")
             }
             Section {
                 Picker("主题", selection: $draft.appThemeMode) {
@@ -165,7 +189,7 @@ struct DrivingSettingsView: View {
             } header: {
                 Text("启动连接意愿")
             } footer: {
-                Text("两个开关独立且默认开启。BMS 策略仅在首次蓝牙可用时尝试已记忆 UUID 一次，手动断开后本次不再自动连接。Controller 启动策略尚未接线。保存不会即时连接或断开；UUID 由服务另存。")
+                Text("两个开关独立且默认开启。BMS 策略仅在首次蓝牙可用时尝试已记忆 UUID 一次，手动断开后本次不再自动连接。Controller 启动连接策略已接线。保存不会即时连接或断开；UUID 由服务另存。")
             }
             Section {
                 ForEach(Array(validationErrors.enumerated()), id: \.offset) { item in
@@ -174,28 +198,28 @@ struct DrivingSettingsView: View {
                 if let notice = store.notice {
                     Text(notice).font(.caption).foregroundStyle(.secondary)
                 }
-                Button("保存本机驾驶设置") { saveDraft() }
+                Button("保存本机驾驶与显示设置") { saveDraft() }
                     .accessibilityIdentifier("driving.save")
                 Button("撤销未保存修改") { reloadDraft() }
-                Button("恢复全部驾驶默认值", role: .destructive) {
+                Button("恢复驾驶与显示默认值", role: .destructive) {
                     focusedField = nil
                     confirmingReset = true
                 }
                 .accessibilityIdentifier("driving.restoreDefaults")
             } footer: {
-                Text("恢复默认只覆盖驾驶设置 key，不清除外设 UUID、设备容量、行程或日志。不控制全局横竖屏；Controller 启动连接尚未接线。")
+                Text("恢复默认仅重置本页驾驶与显示偏好，保留续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。不控制全局横竖屏；Controller 启动连接策略已接线。")
             }
         }
-        .navigationTitle("普通驾驶设置")
+        .navigationTitle("驾驶与显示设置")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             store.reload()
             reloadDraft()
         }
-        .confirmationDialog("恢复全部驾驶默认值？", isPresented: $confirmingReset, titleVisibility: .visible) {
+        .confirmationDialog("恢复驾驶与显示默认值？", isPresented: $confirmingReset, titleVisibility: .visible) {
             Button("恢复并保存默认值", role: .destructive) {
                 do {
-                    try store.restoreDefaults()
+                    try store.restoreDrivingPreferencesDefaults()
                     reloadDraft()
                     onSave(store.settings)
                 } catch {
@@ -204,7 +228,7 @@ struct DrivingSettingsView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将覆盖本机驾驶偏好和当前草稿，两个启动自动连接开关恢复开启；本页不会执行连接。")
+            Text("仅覆盖本页驾驶与显示偏好和当前草稿，两个启动自动连接开关恢复开启；保留续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。本页不会执行连接。")
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -252,7 +276,7 @@ struct DrivingSettingsView: View {
             return
         }
         do {
-            try store.save(candidate)
+            try store.saveDrivingPreferences(candidate)
             reloadDraft()
             onSave(store.settings)
         } catch let error as DrivingSettings.ValidationError {
@@ -303,8 +327,6 @@ struct DrivingSettingsView: View {
     }
 
     private static let cadenceFields: [NumericField] = [
-        .init(id: "rangeWindowMinutes", title: "续航窗口（分钟）", path: .integer(\DrivingSettings.rangeWindowMinutes)),
-        .init(id: "rangeRefreshSeconds", title: "续航刷新（秒）", path: .integer(\DrivingSettings.rangeRefreshSeconds)),
         .init(id: "bluetoothRefreshIntervalMs", title: "BMS 查询（ms）", path: .integer(\DrivingSettings.bluetoothRefreshIntervalMs))
     ]
     private static let scaleFields: [NumericField] = [

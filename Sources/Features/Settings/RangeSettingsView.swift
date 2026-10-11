@@ -11,6 +11,7 @@ struct RangeSettingsView: View {
     @State private var validationError: String?
     @State private var settingsNotice: String?
     @State private var settingsError: String?
+    @State private var confirmingRestoreDefaults = false
     @State private var confirmingClear = false
     @State private var confirmingReset = false
     @State private var confirmationDeviceID: UUID?
@@ -27,13 +28,19 @@ struct RangeSettingsView: View {
                         Text("\(minutes) 分钟").tag(minutes)
                     }
                 }
+                .accessibilityIdentifier("range.window")
                 Picker("预测刷新", selection: $refreshSeconds) {
                     ForEach(DrivingSettings.rangeRefreshSecondsBounds, id: \.self) { seconds in
                         Text("每 \(seconds) 秒").tag(seconds)
                     }
                 }
+                .accessibilityIdentifier("range.refresh")
                 Button("保存窗口与刷新") { saveRangeSettings() }
                     .accessibilityIdentifier("range.save.settings")
+                Button("恢复窗口与刷新默认值", role: .destructive) {
+                    confirmingRestoreDefaults = true
+                }
+                .accessibilityIdentifier("range.restoreDefaults")
                 if let settingsNotice {
                     Text(settingsNotice)
                         .font(.caption)
@@ -46,7 +53,7 @@ struct RangeSettingsView: View {
             } header: {
                 Text("窗口与刷新")
             } footer: {
-                Text("窗口表示最近保留的有效行驶区间，不是保证连续采样的时长；刷新只节流有效预测重算，过期、充电和保护状态仍会立即撤下续航。")
+                Text("窗口和刷新为全局偏好，所有设备共用；容量单独按设备保存。窗口保留最近的有效行驶区间，数据过期、充电和保护状态仍会立即撤下续航。结果和导出在「仪表盘 → 综合续航」查看。")
             }
 
             Section {
@@ -72,27 +79,7 @@ struct RangeSettingsView: View {
             }
 
             Section {
-                Button("生成 JSON") { exportJSON() }
-                    .accessibilityIdentifier("range.settings.export.json")
-                Button("生成 CSV") { exportCSV() }
-                    .accessibilityIdentifier("range.settings.export.csv")
-                if let url = range.lastExportURL {
-                    ShareLink(item: url) { Label("分享导出文件", systemImage: "square.and.arrow.up") }
-                    Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if let error = range.lastError {
-                    Text(error).font(.caption).foregroundStyle(.red)
-                        .accessibilityIdentifier("range.settings.export.error")
-                }
-            } header: {
-                Text("本地导出")
-            } footer: {
-                Text("JSON/CSV 导出当前状态、窗口指标和已应用配置；JSON 另含有效区间。不包含原始坐标、不上传，无有效数据时明确导出空状态。")
-            }
-
-            Section {
-                Text(range.deviceID?.uuidString ?? "未绑定设备：等待主线程接入稳定外设 UUID。")
+                Text(range.deviceID?.uuidString ?? "未连接设备；连接 BMS 后可设置本设备容量。")
                     .font(.caption)
                     .textSelection(.enabled)
                 Button("清除当前有效窗口", role: .destructive) {
@@ -111,7 +98,7 @@ struct RangeSettingsView: View {
                 Text("清除窗口会保留本设备容量；重置会同时删除本设备容量设置。两者都不删除其他设备设置、行程记录或已导出文件。")
             }
         }
-        .navigationTitle("续航设置")
+        .navigationTitle("综合续航设置")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             reloadCapacity()
@@ -127,6 +114,16 @@ struct RangeSettingsView: View {
         .onChange(of: driving.settings) { _ in
             reloadRangeSettings()
         }
+        .confirmationDialog("恢复续航窗口与刷新默认值？", isPresented: $confirmingRestoreDefaults, titleVisibility: .visible) {
+            Button("恢复并保存默认值", role: .destructive) {
+                windowMinutes = DrivingSettings.defaults.rangeWindowMinutes
+                refreshSeconds = DrivingSettings.defaults.rangeRefreshSeconds
+                saveRangeSettings()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("恢复为 15 分钟窗口和 10 秒刷新，不改变驾驶与显示偏好、任何设备容量、行程或日志。应用较短窗口时，超出窗口的有效区间会被移除。")
+        }
         .confirmationDialog("清除当前设备续航窗口？", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("清除窗口", role: .destructive) {
                 guard let id = confirmationDeviceID, id == range.deviceID else { return }
@@ -136,7 +133,7 @@ struct RangeSettingsView: View {
         } message: {
             Text("只清除当前有效行驶区间，额定容量和窗口/刷新设置保留。")
         }
-        .confirmationDialog("重置当前设备续航？", isPresented: $confirmingReset, titleVisibility: .visible) {
+        .confirmationDialog("重置本设备容量与窗口？", isPresented: $confirmingReset, titleVisibility: .visible) {
             Button("重置", role: .destructive) {
                 guard let id = confirmationDeviceID, id == range.deviceID else { return }
                 editingCapacity = false
@@ -145,7 +142,7 @@ struct RangeSettingsView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("清除当前设备的额定容量设置与有效窗口，不能撤销。")
+            Text("清除当前设备的额定容量设置与有效窗口，不能撤销；不恢复全局窗口/刷新，也不删除其他设备容量、行程或导出文件。")
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -167,29 +164,16 @@ struct RangeSettingsView: View {
     }
 
     private func saveRangeSettings() {
-        var candidate = driving.settings
-        candidate.rangeWindowMinutes = windowMinutes
-        candidate.rangeRefreshSeconds = refreshSeconds
         settingsNotice = nil
         settingsError = nil
         do {
-            try driving.save(candidate)
+            try driving.saveRangePreferences(windowMinutes: windowMinutes, refreshSeconds: refreshSeconds)
             // RootView 也会消费同一个 Published 快照；这里立即应用，避免页面返回前显示旧配置。
-            range.applyDrivingSettings(candidate)
+            range.applyDrivingSettings(driving.settings)
             settingsNotice = "已保存到本机并应用到续航服务。"
         } catch {
             settingsError = "保存失败：\(error.localizedDescription)"
         }
-    }
-
-    private func exportJSON() {
-        do { _ = try range.exportJSON() }
-        catch { /* 服务发布导出错误，页面保留可见错误。 */ }
-    }
-
-    private func exportCSV() {
-        do { _ = try range.exportCSV() }
-        catch { /* 服务发布导出错误，页面保留可见错误。 */ }
     }
 
     private func saveCapacity() {

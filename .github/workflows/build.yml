@@ -38,6 +38,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Check settings source contracts
+        run: python3 scripts/check_settings_contract.py
+
+      - name: Check dashboard source contracts
+        run: python3 scripts/check_dashboard_contract.py
+
       - name: Run Swift package tests
         run: swift test
 
