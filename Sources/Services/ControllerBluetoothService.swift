@@ -61,7 +61,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     @Published public private(set) var connectedDeviceName: String?
     @Published public private(set) var rememberedDeviceID: UUID?
     @Published public private(set) var rememberedDeviceName: String?
-    @Published public private(set) var isKeywordFilterEnabled: Bool
+    @Published public private(set) var isKeywordFilterEnabled: Bool = true
     public var isConnectionActive: Bool { connectedDeviceID != nil || automaticConnectionTargetID != nil }
     /// 首页/加速订阅 $latestSnapshot 的事件参数，勿在 @Published willSet 回调中反读属性。
     @Published public private(set) var latestSnapshot: ControllerTelemetrySnapshot?
