@@ -434,15 +434,20 @@ final class RangeService: ObservableObject {
 
     func exportCSV() throws -> URL {
         refresh()
-        let fields = [
+        let whPerKmText = effectiveWhPerKm.map { String($0) } ?? ""
+        let predictedRangeText = prediction?.predictedRangeKm.map { String($0) } ?? ""
+        let averageSpeedText = averageSpeedKmh.map { String($0) } ?? ""
+        let referenceText = referenceKmPerAh.map { String($0) } ?? ""
+        let values: [String] = [
             ISO8601DateFormatter().string(from: clock()), deviceID?.uuidString ?? "",
             nominalCapacityAh > 0 ? String(nominalCapacityAh) : "",
             String(accumulatedDistanceMeters), String(accumulatedNetWh),
-            effectiveWhPerKm.map { String($0) } ?? "", prediction?.predictedRangeKm.map { String($0) } ?? "",
+            whPerKmText, predictedRangeText,
             status.rawValue, reasonText, String(accumulatedNetAh),
-            averageSpeedKmh.map { String($0) } ?? "", referenceKmPerAh.map { String($0) } ?? "",
+            averageSpeedText, referenceText,
             String(windowAge), String(predictionRefreshInterval)
-        ].map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        ]
+        let fields = values.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         let csv = "generated_at,device_id,nominal_capacity_ah,distance_meters,net_wh,wh_per_km,predicted_range_km,status,reason,net_ah,average_speed_kmh,reference_km_per_ah,window_seconds,prediction_refresh_seconds\r\n"
             + fields.joined(separator: ",") + "\r\n"
         return try writeExport(extension: "csv") { Data(csv.utf8) }
