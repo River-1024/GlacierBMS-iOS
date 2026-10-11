@@ -201,8 +201,11 @@ final class ANTuRideUITests: XCTestCase {
         let batteryFilter = app.switches["bluetooth.battery.filter"]
         scrollUntilVisible(batteryFilter, in: app)
         XCTAssertEqual(batteryFilter.value as? String, "1")
-        batteryFilter.tap()
-        XCTAssertEqual(batteryFilter.value as? String, "0")
+        // Tap the switch control itself; the accessibility frame may include the full List row.
+        batteryFilter.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        let filterDisabled = NSPredicate(format: "value == %@", "0")
+        expectation(for: filterDisabled, evaluatedWith: batteryFilter)
+        waitForExpectations(timeout: 5)
         let controllerFilter = app.switches["bluetooth.controller.filter"]
         scrollUntilVisible(controllerFilter, in: app)
         XCTAssertEqual(controllerFilter.value as? String, "1", "电池过滤不改变控制器过滤")
@@ -232,7 +235,9 @@ final class ANTuRideUITests: XCTestCase {
         let forgetController = app.buttons["bluetooth.controller.forget"]
         scrollUntilVisible(forgetController, in: app)
         XCTAssertTrue(forgetController.exists)
-        XCTAssertTrue(app.staticTexts["APT-Test-Controller"].exists)
+        let rememberedController = app.descendants(matching: .any)["bluetooth.controller.rememberedDevice"]
+        XCTAssertTrue(rememberedController.exists)
+        XCTAssertTrue(rememberedController.label.contains("APT-Test-Controller"))
     }
 
     private func scrollUntilVisible(_ element: XCUIElement, in app: XCUIApplication) {

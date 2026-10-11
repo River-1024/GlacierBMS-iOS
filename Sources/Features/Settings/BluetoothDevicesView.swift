@@ -53,7 +53,8 @@ struct BluetoothDevicesView: View {
             if let name = bms.connectedDeviceName, bms.isConnectionActive {
                 LabeledContent("当前电池", value: name)
             }
-            rememberedRow(name: bms.rememberedDeviceName, id: bms.rememberedDeviceID)
+            rememberedRow(name: bms.rememberedDeviceName, id: bms.rememberedDeviceID,
+                          accessibilityID: "bluetooth.battery.rememberedDevice")
             Toggle("自动连接上次电池", isOn: batteryAutoConnect)
                 .accessibilityIdentifier("bluetooth.battery.autoConnect")
             Toggle("按名称过滤（ant）", isOn: Binding(
@@ -107,7 +108,8 @@ struct BluetoothDevicesView: View {
             if let name = controller.connectedDeviceName, controller.isConnectionActive {
                 LabeledContent("当前控制器", value: name)
             }
-            rememberedRow(name: controller.rememberedDeviceName, id: controller.rememberedDeviceID)
+            rememberedRow(name: controller.rememberedDeviceName, id: controller.rememberedDeviceID,
+                          accessibilityID: "bluetooth.controller.rememberedDevice")
             Toggle("自动连接上次控制器", isOn: controllerAutoConnect)
                 .accessibilityIdentifier("bluetooth.controller.autoConnect")
             Toggle("按名称过滤（apt）", isOn: Binding(
@@ -158,12 +160,14 @@ struct BluetoothDevicesView: View {
         }
     }
 
-    @ViewBuilder private func rememberedRow(name: String?, id: UUID?) -> some View {
+    @ViewBuilder private func rememberedRow(name: String?, id: UUID?, accessibilityID: String) -> some View {
         if let id {
             LabeledContent("上次成功设备", value: name ?? "已记忆设备")
+                .accessibilityIdentifier(accessibilityID)
             Text(id.uuidString).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
         } else {
             LabeledContent("上次成功设备", value: "尚未记忆")
+                .accessibilityIdentifier(accessibilityID)
         }
     }
 
