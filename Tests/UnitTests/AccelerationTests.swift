@@ -35,15 +35,15 @@ final class AccelerationTests: XCTestCase {
         let s = try session(target: 25)
         arm(s)
         s.ingest(sample(2_100, 0.5)); s.ingest(sample(2_200, 1.0)); s.ingest(sample(2_300, 1.5))
-        XCTAssertEqual(s.record?.result(for: .rpm)?.startTimestamp, 2.0, accuracy: 0.000_001)
+        XCTAssertEqual(try XCTUnwrap(s.record?.result(for: .rpm)?.startTimestamp), 2.0, accuracy: 0.000_001)
         for ms in stride(from: 2_400.0, through: 7_000, by: 100) {
             s.ingest(sample(ms, (ms - 2_000) * 0.005))
         }
         s.ingest(sample(7_020, 25))
         let result = try XCTUnwrap(s.record?.result(for: .rpm))
         XCTAssertEqual(result.splits.map(\.targetSpeedKmh), [10, 20, 25])
-        XCTAssertEqual(result.splits.map(\.crossedAt), [4, 6, 7], accuracy: 0.000_001)
-        XCTAssertEqual(result.splits.map(\.cumulativeSeconds), [2, 4, 5], accuracy: 0.000_001)
+        for (actual, expected) in zip(result.splits.map(\.crossedAt), [4.0, 6.0, 7.0]) { XCTAssertEqual(actual, expected, accuracy: 0.000_001) }
+        for (actual, expected) in zip(result.splits.map(\.cumulativeSeconds), [2.0, 4.0, 5.0]) { XCTAssertEqual(actual, expected, accuracy: 0.000_001) }
         XCTAssertEqual(s.record?.phase, .completed)
     }
 
