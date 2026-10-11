@@ -44,6 +44,9 @@ jobs:
       - name: Check dashboard source contracts
         run: python3 scripts/check_dashboard_contract.py
 
+      - name: Check Bluetooth separation source contracts
+        run: python3 scripts/check_bluetooth_contract.py
+
       - name: Run Swift package tests
         run: swift test
 

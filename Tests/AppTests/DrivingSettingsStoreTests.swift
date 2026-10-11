@@ -26,6 +26,28 @@ final class DrivingSettingsStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testBluetoothPreferencesPreserveLatestDrivingAndRangeAndEachOther() throws {
+        try withDefaults { defaults in
+            let store = DrivingSettingsStore(defaults: defaults)
+            var draft = store.settings
+            draft.appThemeMode = .dark
+            draft.rangeWindowMinutes = 30
+            try store.save(draft)
+            try store.saveBluetoothPreferences(bmsEnabled: false, controllerEnabled: true)
+            XCTAssertFalse(store.settings.bmsAutoConnectEnabled)
+            XCTAssertTrue(store.settings.controllerAutoConnectEnabled)
+            try store.saveBluetoothPreferences(bmsEnabled: false, controllerEnabled: false)
+            draft.valueScale = 1.4
+            try store.saveDrivingPreferences(draft)
+            XCTAssertFalse(store.settings.bmsAutoConnectEnabled)
+            XCTAssertFalse(store.settings.controllerAutoConnectEnabled)
+            XCTAssertEqual(store.settings.rangeWindowMinutes, 30)
+            XCTAssertEqual(store.settings.appThemeMode, .dark)
+            XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, store.settings)
+        }
+    }
+
+    @MainActor
     func testInvalidSaveDoesNotWriteOrPublish() throws {
         try withDefaults { defaults in
             let store = DrivingSettingsStore(defaults: defaults)
@@ -61,6 +83,8 @@ final class DrivingSettingsStoreTests: XCTestCase {
             var expected = staleDraft
             expected.rangeWindowMinutes = 30
             expected.rangeRefreshSeconds = 45
+            expected.bmsAutoConnectEnabled = rangeUpdate.bmsAutoConnectEnabled
+            expected.controllerAutoConnectEnabled = rangeUpdate.controllerAutoConnectEnabled
             XCTAssertEqual(store.settings, expected)
             XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, expected)
         }
@@ -92,6 +116,8 @@ final class DrivingSettingsStoreTests: XCTestCase {
             var expected = DrivingSettings.defaults
             expected.rangeWindowMinutes = 30
             expected.rangeRefreshSeconds = 45
+            expected.bmsAutoConnectEnabled = false
+            expected.controllerAutoConnectEnabled = false
             XCTAssertEqual(store.settings, expected)
             XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, expected)
             XCTAssertEqual(defaults.string(forKey: BmsBluetoothService.rememberedDeviceDefaultsKey), id.uuidString)

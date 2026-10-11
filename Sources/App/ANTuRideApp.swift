@@ -19,12 +19,19 @@ struct ANTuRideApp: App {
         // 服务在同一处构造并共享实例：行程会话直接引用 BMS 与定位服务。
         let defaults = Self.settingsDefaults()
         let driving = DrivingSettingsStore(defaults: defaults)
-        let controller = ControllerBluetoothService(startupAutoConnectEnabled: driving.settings.controllerAutoConnectEnabled)
+        let registry = BluetoothDeviceRegistry()
+        let createsBluetoothManager = Self.createsBluetoothManager()
+        let controllerHistory = createsBluetoothManager ? ControllerHistoryStore() : ControllerHistoryStore(
+            directory: FileManager.default.temporaryDirectory.appendingPathComponent("UITest-Controller-\(UUID().uuidString)", isDirectory: true))
+        let controller = ControllerBluetoothService(historyStore: controllerHistory, defaults: defaults,
+            startupAutoConnectEnabled: driving.settings.controllerAutoConnectEnabled,
+            createsBluetoothManager: createsBluetoothManager, registry: registry)
         _controllerService = StateObject(wrappedValue: controller)
         _accelerationService = StateObject(wrappedValue: AccelerationService(controller: controller))
         _drivingSettings = StateObject(wrappedValue: driving)
         let bms = BmsBluetoothService(defaults: defaults, startupAutoConnectEnabled: driving.settings.bmsAutoConnectEnabled,
-                                      queryIntervalMs: driving.settings.bluetoothRefreshIntervalMs)
+                                      queryIntervalMs: driving.settings.bluetoothRefreshIntervalMs,
+                                      createsBluetoothManager: createsBluetoothManager, registry: registry)
         let location = LocationService()
         _bmsService = StateObject(wrappedValue: bms)
         _locationService = StateObject(wrappedValue: location)
@@ -39,17 +46,27 @@ struct ANTuRideApp: App {
     private static func settingsDefaults() -> UserDefaults {
         #if DEBUG
         // UI 回归只操作隔离套件，不改用户驾驶配置、真实设备 UUID 或电池容量。
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-settings-seeded") {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-test-settings-seeded") || arguments.contains("--ui-test-bluetooth-empty") ||
+            arguments.contains("--ui-test-bluetooth-seeded") {
             guard let defaults = UserDefaults(suiteName: "UITest-Settings-\(UUID().uuidString)") else {
                 preconditionFailure("无法创建 UI 测试设置套件")
             }
             var settings = DrivingSettings.defaults
-            settings.rangeWindowMinutes = 30
-            settings.rangeRefreshSeconds = 45
-            settings.appThemeMode = .dark
-            settings.bluetoothRefreshIntervalMs = 250
-            settings.bmsAutoConnectEnabled = false
-            settings.controllerAutoConnectEnabled = false
+            if arguments.contains("--ui-test-settings-seeded") {
+                settings.rangeWindowMinutes = 30
+                settings.rangeRefreshSeconds = 45
+                settings.appThemeMode = .dark
+                settings.bluetoothRefreshIntervalMs = 250
+                settings.bmsAutoConnectEnabled = false
+                settings.controllerAutoConnectEnabled = false
+            }
+            if arguments.contains("--ui-test-bluetooth-seeded") {
+                defaults.set("11111111-1111-1111-1111-111111111111", forKey: BmsBluetoothService.rememberedDeviceDefaultsKey)
+                defaults.set("ANT-Test-Battery", forKey: "com.zjsf.anturide.bms.lastPeripheralName")
+                defaults.set("22222222-2222-2222-2222-222222222222", forKey: ControllerBluetoothService.rememberedDeviceDefaultsKey)
+                defaults.set("APT-Test-Controller", forKey: "com.zjsf.anturide.controller.lastPeripheralName")
+            }
             do {
                 defaults.set(try JSONEncoder().encode(settings), forKey: DrivingSettingsStore.key)
             } catch {
@@ -59,6 +76,16 @@ struct ANTuRideApp: App {
         }
         #endif
         return .standard
+    }
+
+    private static func createsBluetoothManager() -> Bool {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        // 页面测试不扫描真实设备、不请求 BLE 授权、不触碰用户的外设记忆。
+        if arguments.contains("--ui-test-settings-seeded") || arguments.contains("--ui-test-bluetooth-empty") ||
+            arguments.contains("--ui-test-bluetooth-seeded") { return false }
+        #endif
+        return true
     }
 
     private static func tripStore() -> TripStore {

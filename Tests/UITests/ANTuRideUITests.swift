@@ -75,7 +75,7 @@ final class ANTuRideUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         XCTAssertEqual(app.tabBars.buttons.count, 5)
-        for title in ["仪表盘", "设备", "详情", "行程", "设置"] {
+        for title in ["仪表盘", "电池", "控制器", "行程", "设置"] {
             XCTAssertTrue(app.tabBars.buttons[title].exists, title)
         }
         XCTAssertFalse(app.tabBars.buttons["More"].exists)
@@ -166,6 +166,81 @@ final class ANTuRideUITests: XCTestCase {
         let bmsQuery = app.textFields["driving.bluetoothRefreshIntervalMs"]
         XCTAssertTrue(bmsQuery.waitForExistence(timeout: 5))
         XCTAssertEqual(bmsQuery.value as? String, "250")
+    }
+
+    func testBatteryAndControllerTabsOnlyShowTheirOwnDataAndHistoryIsSecondary() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-bluetooth-empty"]
+        app.launch()
+        app.tabBars.buttons["电池"].tap()
+        XCTAssertTrue(app.navigationBars["电池"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["battery.noData"].exists)
+        XCTAssertFalse(app.buttons["bluetooth.battery.scan"].exists)
+        XCTAssertFalse(app.buttons["扫描电池"].exists)
+        app.tabBars.buttons["控制器"].tap()
+        XCTAssertTrue(app.navigationBars["控制器"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["controller.noData"].exists)
+        XCTAssertFalse(app.buttons["controller-scan"].exists)
+        XCTAssertFalse(app.buttons["扫描控制器"].exists)
+        let history = app.buttons["controller.history"]
+        scrollUntilVisible(history, in: app)
+        history.tap()
+        XCTAssertTrue(app.navigationBars["记录与历史"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["controller-record-toggle"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["控制器"].waitForExistence(timeout: 5))
+    }
+
+    func testBluetoothSettingsHasSeparateNameFiltersAndAutoConnectionControls() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-bluetooth-empty"]
+        app.launch()
+        app.tabBars.buttons["设置"].tap()
+        app.buttons["settings.bluetooth"].tap()
+        XCTAssertTrue(app.navigationBars["蓝牙设备"].waitForExistence(timeout: 5))
+        let batteryFilter = app.switches["bluetooth.battery.filter"]
+        scrollUntilVisible(batteryFilter, in: app)
+        XCTAssertEqual(batteryFilter.value as? String, "1")
+        batteryFilter.tap()
+        XCTAssertEqual(batteryFilter.value as? String, "0")
+        let controllerFilter = app.switches["bluetooth.controller.filter"]
+        scrollUntilVisible(controllerFilter, in: app)
+        XCTAssertEqual(controllerFilter.value as? String, "1", "电池过滤不改变控制器过滤")
+        XCTAssertTrue(app.switches["bluetooth.controller.autoConnect"].exists)
+        XCTAssertTrue(app.buttons["bluetooth.controller.scan"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["settings.bluetooth"].tap()
+        scrollUntilVisible(batteryFilter, in: app)
+        XCTAssertEqual(batteryFilter.value as? String, "0", "返回页面后保留电池过滤偏好")
+    }
+
+    func testForgettingBatteryDoesNotForgetControllerAndRequiresConfirmation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-bluetooth-seeded"]
+        app.launch()
+        app.tabBars.buttons["设置"].tap()
+        app.buttons["settings.bluetooth"].tap()
+        let forgetBattery = app.buttons["bluetooth.battery.forget"]
+        scrollUntilVisible(forgetBattery, in: app)
+        forgetBattery.tap()
+        XCTAssertTrue(app.buttons["忘记设备"].waitForExistence(timeout: 5))
+        app.buttons["取消"].tap()
+        XCTAssertTrue(forgetBattery.exists)
+        forgetBattery.tap()
+        app.buttons["忘记设备"].tap()
+        XCTAssertFalse(forgetBattery.exists)
+        let forgetController = app.buttons["bluetooth.controller.forget"]
+        scrollUntilVisible(forgetController, in: app)
+        XCTAssertTrue(forgetController.exists)
+        XCTAssertTrue(app.staticTexts["APT-Test-Controller"].exists)
+    }
+
+    private func scrollUntilVisible(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<12 {
+            if element.exists && element.isHittable { return }
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.exists && element.isHittable, "未找到可交互元素：\(element.identifier)")
     }
 
     private func waitForOrientation(_ app: XCUIApplication, landscape: Bool) -> Bool {

@@ -34,7 +34,7 @@ struct AccelerationView: View {
                 accelerationValueRow("换算速度", accelerationNumber(displayedSpeed, unit: "km/h"))
                 accelerationValueRow("母线电流", accelerationNumber(acceleration.busCurrentA, unit: "A"))
                 accelerationValueRow("相线峰值电流", accelerationNumber(acceleration.phasePeakCurrentA, unit: "A"))
-                NavigationLink("连接 / 查看控制器") { ControllerView() }
+                NavigationLink("前往蓝牙设备设置") { BluetoothDevicesView() }
             }
             Section {
                 HStack {

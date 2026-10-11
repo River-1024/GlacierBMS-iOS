@@ -55,7 +55,7 @@ final class DrivingSettingsStore: ObservableObject {
         let data = try JSONEncoder().encode(saved)
         defaults.set(data, forKey: Self.key)
         settings = saved
-        notice = "已保存到本机。主题、BMS 查询周期和续航配置由 App 消费；控制器启动连接策略已接线，关闭/打开开关不触发即时连接。"
+        notice = "已保存到本机。主题、BMS 查询周期和续航配置由 App 消费；电池/控制器自动连接开关在蓝牙设备页设置，保存本身不触发连接。"
     }
 
     /// 驾驶页只覆盖驾驶与显示偏好；旧草稿不能回写续航页后来保存的窗口/刷新。
@@ -65,7 +65,17 @@ final class DrivingSettingsStore: ObservableObject {
         var saved = candidate
         saved.rangeWindowMinutes = settings.rangeWindowMinutes
         saved.rangeRefreshSeconds = settings.rangeRefreshSeconds
+        saved.bmsAutoConnectEnabled = settings.bmsAutoConnectEnabled
+        saved.controllerAutoConnectEnabled = settings.controllerAutoConnectEnabled
         try save(saved)
+    }
+
+    /// 蓝牙页仅修改连接意愿；基于最新快照，不覆盖其他页面已保存的字段。
+    func saveBluetoothPreferences(bmsEnabled: Bool, controllerEnabled: Bool) throws {
+        var candidate = settings
+        candidate.bmsAutoConnectEnabled = bmsEnabled
+        candidate.controllerAutoConnectEnabled = controllerEnabled
+        try save(candidate)
     }
 
     /// 续航页只覆盖两个全局周期字段，始终基于最新快照保留驾驶与显示偏好。
@@ -87,8 +97,8 @@ final class DrivingSettingsStore: ObservableObject {
 
 /// 驾驶与显示偏好的草稿页面。未保存的输入不写 UserDefaults；返回页面不会隐式保存。
 /// 接入示例（主线程）：DrivingSettingsView(store: store) { settings in /* 应用偏好 */ }
-/// App/Root 已消费主题、BMS 查询/启动策略；续航窗口/刷新仅在 RangeSettingsView 编辑。
-/// 字号/描述/功率图/阈值/探头选择由 Dashboard 单独消费，控制器启动连接策略已接线，关闭/打开开关不触发即时连接。
+/// App/Root 已消费主题和 BMS 查询周期；连接策略在蓝牙设备页编辑，续航周期在续航设置编辑。
+/// 字号/描述/功率图/阈值/探头选择由 Dashboard 单独消费，连接开关在蓝牙设备页编辑。
 /// 控制器采样周期不属于本页。
 /// 横竖屏锁需要 UIApplication/scene 方向策略，故不提供伪有效的开关。
 @MainActor
@@ -115,7 +125,7 @@ struct DrivingSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("本页管理驾驶与显示偏好，不写 BMS 或控制器硬件配置。App 已接入主题、BMS 查询与启动连接策略；续航窗口和刷新请在续航设置中编辑。保存不代表设备连接成功。")
+                Text("本页管理驾驶与显示偏好，不写 BMS 或控制器硬件配置。App 已接入主题、BMS 查询周期；自动连接请在蓝牙设备中设置，续航窗口和刷新请在续航设置中编辑。保存不代表设备连接成功。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -182,16 +192,6 @@ struct DrivingSettingsView: View {
                 Text("满格 1–300 km/h；0 ≤ 中速 ≤ 高速 ≤ 满格。不是车辆限速。")
             }
             Section {
-                Toggle("启动时自动连接 BMS", isOn: $draft.bmsAutoConnectEnabled)
-                    .accessibilityIdentifier("driving.bmsAutoConnect")
-                Toggle("启动时自动连接控制器", isOn: $draft.controllerAutoConnectEnabled)
-                    .accessibilityIdentifier("driving.controllerAutoConnect")
-            } header: {
-                Text("启动连接意愿")
-            } footer: {
-                Text("两个开关独立且默认开启。BMS 策略仅在首次蓝牙可用时尝试已记忆 UUID 一次，手动断开后本次不再自动连接。Controller 启动连接策略已接线。保存不会即时连接或断开；UUID 由服务另存。")
-            }
-            Section {
                 ForEach(Array(validationErrors.enumerated()), id: \.offset) { item in
                     Text(item.element).font(.caption).foregroundStyle(.red)
                 }
@@ -207,7 +207,7 @@ struct DrivingSettingsView: View {
                 }
                 .accessibilityIdentifier("driving.restoreDefaults")
             } footer: {
-                Text("恢复默认仅重置本页驾驶与显示偏好，保留续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。不控制全局横竖屏；Controller 启动连接策略已接线。")
+                Text("恢复默认仅重置本页驾驶与显示偏好，保留蓝牙自动连接开关、续航周期、首页布局、外设 UUID、设备容量、行程和日志。不控制全局横竖屏。")
             }
         }
         .navigationTitle("驾驶与显示设置")
@@ -228,7 +228,7 @@ struct DrivingSettingsView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("仅覆盖本页驾驶与显示偏好和当前草稿，两个启动自动连接开关恢复开启；保留续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。本页不会执行连接。")
+            Text("仅覆盖本页驾驶与显示偏好和当前草稿，保留两个自动连接开关和续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。本页不会执行连接。")
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {

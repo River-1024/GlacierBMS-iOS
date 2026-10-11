@@ -10,6 +10,15 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
+                    NavigationLink { BluetoothDevicesView() } label: {
+                        Label("蓝牙设备", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityIdentifier("settings.bluetooth")
+                } header: { Text("连接管理") } footer: {
+                    Text("电池与控制器分别搜索、连接、断开和记忆；自动连接策略在蓝牙设备中设置。")
+                }
+
+                Section {
                     NavigationLink { DrivingSettingsView(store: driving) } label: {
                         Label("驾驶与显示设置", systemImage: "slider.horizontal.3")
                     }
@@ -21,7 +30,7 @@ struct SettingsView: View {
                 } header: {
                     Text("驾驶与显示")
                 } footer: {
-                    Text("主题、字号、功率图、颜色阈值、BMS 查询周期与启动连接策略在驾驶设置中修改；首页布局独立保存，未保存的草稿不会生效。")
+                    Text("主题、字号、功率图、颜色阈值、BMS 查询周期在驾驶设置中修改；首页布局独立保存，未保存的草稿不会生效。")
                 }
 
                 Section {
@@ -40,8 +49,8 @@ struct SettingsView: View {
                         Label("RPM 加速测试与历史", systemImage: "speedometer")
                     }
                     .accessibilityIdentifier("settings.acceleration")
-                    NavigationLink { ControllerView() } label: {
-                        Label("控制器与历史记录", systemImage: "engine.combustion")
+                    NavigationLink { ControllerHistoryView() } label: {
+                        Label("控制器记录与历史", systemImage: "engine.combustion")
                     }
                     .accessibilityIdentifier("settings.controller")
                 } header: {

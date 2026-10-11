@@ -29,6 +29,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     public static let queryInterval: TimeInterval = 0.05
     public static let responseTimeout: TimeInterval = 1
     public static let recordingDuration: TimeInterval = 1800
+    static let automaticConnectionTimeout: TimeInterval = 10
 
     public enum State: String {
         case idle, unavailable, scanning, connecting, discovering, enablingNotifications, ready, paused, disconnected, failed
@@ -58,6 +59,10 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     @Published public private(set) var discoveredDevices: [DiscoveredDevice] = []
     @Published public private(set) var connectedDeviceID: UUID?
     @Published public private(set) var connectedDeviceName: String?
+    @Published public private(set) var rememberedDeviceID: UUID?
+    @Published public private(set) var rememberedDeviceName: String?
+    @Published public private(set) var isKeywordFilterEnabled: Bool
+    public var isConnectionActive: Bool { connectedDeviceID != nil || automaticConnectionTargetID != nil }
     /// 首页/加速订阅 $latestSnapshot 的事件参数，勿在 @Published willSet 回调中反读属性。
     @Published public private(set) var latestSnapshot: ControllerTelemetrySnapshot?
     public var latestTelemetry: MotorControllerTelemetry? { latestSnapshot?.telemetry }
@@ -76,9 +81,17 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     public let historyStore: ControllerHistoryStore
 
     static let rememberedDeviceDefaultsKey = "com.zjsf.anturide.controller.lastPeripheralUUID"
+    static let rememberedDeviceNameDefaultsKey = "com.zjsf.anturide.controller.lastPeripheralName"
+    static let keywordFilterDefaultsKey = "com.zjsf.anturide.controller.nameFilterEnabled"
     private let defaults: UserDefaults
+    private let registry: BluetoothDeviceRegistry
+    private var claimedDeviceID: UUID?
+    private var autoConnectionPolicy = DeviceAutoConnectionPolicy()
+    private(set) var automaticConnectionTargetID: UUID?
+    private var automaticConnectionDeadline: TimeInterval?
+    private var automaticConnectionTask: Task<Void, Never>?
+    private var hasValidatedDevice = false
     private var startupAutoConnectEnabled: Bool
-    private var startupConnectionConsumed = false
     private var central: CBCentralManager?
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
@@ -104,17 +117,23 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     private var recordDeviceName = ""
 
     public convenience init(historyStore: ControllerHistoryStore = ControllerHistoryStore(),
-                            defaults: UserDefaults = .standard, startupAutoConnectEnabled: Bool = true) {
+                            defaults: UserDefaults = .standard, startupAutoConnectEnabled: Bool = true,
+                            createsBluetoothManager: Bool = true, registry: BluetoothDeviceRegistry? = nil) {
         self.init(historyStore: historyStore, clock: Date.init,
-                  uptime: { ProcessInfo.processInfo.systemUptime }, createsBluetoothManager: true,
-                  defaults: defaults, startupAutoConnectEnabled: startupAutoConnectEnabled)
+                  uptime: { ProcessInfo.processInfo.systemUptime }, createsBluetoothManager: createsBluetoothManager,
+                  defaults: defaults, startupAutoConnectEnabled: startupAutoConnectEnabled, registry: registry)
     }
 
     /// 可注入时钟且不创建蓝牙管理器，AppTests 因而不会触发权限或扫描真机。
     init(historyStore: ControllerHistoryStore, clock: @escaping () -> Date,
          uptime: @escaping () -> TimeInterval, createsBluetoothManager: Bool,
-         defaults: UserDefaults = .standard, startupAutoConnectEnabled: Bool = true) {
+         defaults: UserDefaults = .standard, startupAutoConnectEnabled: Bool = true,
+         registry: BluetoothDeviceRegistry? = nil) {
         self.defaults = defaults
+        self.registry = registry ?? .shared
+        rememberedDeviceID = defaults.string(forKey: Self.rememberedDeviceDefaultsKey).flatMap(UUID.init(uuidString:))
+        rememberedDeviceName = rememberedDeviceID == nil ? nil : defaults.string(forKey: Self.rememberedDeviceNameDefaultsKey)
+        isKeywordFilterEnabled = defaults.object(forKey: Self.keywordFilterDefaultsKey) as? Bool ?? true
         self.startupAutoConnectEnabled = startupAutoConnectEnabled
         self.historyStore = historyStore
         self.clock = clock
@@ -124,60 +143,126 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         if createsBluetoothManager { central = CBCentralManager(delegate: self, queue: .main) }
     }
 
+    public func setKeywordFilterEnabled(_ enabled: Bool) {
+        guard enabled != isKeywordFilterEnabled else { return }
+        isKeywordFilterEnabled = enabled
+        defaults.set(enabled, forKey: Self.keywordFilterDefaultsKey)
+        discoveredDevices.removeAll { !matchesDeviceName($0.name) }
+        if state == .scanning, let central, central.state == .poweredOn {
+            // AllowDuplicates=false 下重启发现，关闭过滤后也能重新列出此前被排除的设备。
+            // 不重置定向扫描的 UUID/deadline，也不改变自动连接策略。
+            central.stopScan()
+            peripherals.removeAll()
+            discoveredDevices = []
+            central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        }
+    }
+
+    private func matchesDeviceName(_ name: String) -> Bool {
+        BluetoothDeviceNameFilter.matches(name, role: .controller, enabled: isKeywordFilterEnabled)
+    }
+
+    func acceptsDiscoveredDevice(id: UUID, name: String) -> Bool {
+        guard state == .scanning, registry.owner(of: id) != .battery else { return false }
+        if let targetID = automaticConnectionTargetID { return targetID == id }
+        return matchesDeviceName(name)
+    }
+
+    public func beginForegroundSession() {
+        autoConnectionPolicy.beginForegroundSession()
+        attemptStartupConnection()
+    }
+
     public func startScan() {
-        startupConnectionConsumed = true
+        autoConnectionPolicy.suppressForForegroundSession()
+        cancelAutomaticConnection()
         guard let central, central.state == .poweredOn else {
             lastError = "蓝牙未开启或未授权"
             return
         }
-        // 不在已有 GATT 会话上切换扫描状态，也不自动选择/连接设备。
-        guard peripheral == nil else { lastError = "请先断开当前控制器"; return }
+        guard !isConnectionActive else { lastError = "请先断开当前控制器"; return }
         peripherals.removeAll()
         discoveredDevices = []
         lastError = nil
         state = .scanning
-        // 安卓链路允许手动选设备；不要求广播 FFE0，名称也不作为协议凭证。
+        // 名称按 APT 过滤；共享 FFE0 服务不是控制器角色凭证。
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
 
+    /// 离开设置仅停止手动搜索，不取消 App 管理的自动定向恢复。
+    public func stopManualScan() {
+        guard automaticConnectionTargetID == nil else { return }
+        stopScan()
+    }
+
     public func stopScan() {
+        if state == .scanning { cancelAutomaticConnection() }
         central?.stopScan()
         if state == .scanning { state = .idle }
     }
 
     public func connect(to id: UUID) {
-        startupConnectionConsumed = true
+        autoConnectionPolicy.allowManualConnection()
+        cancelAutomaticConnection()
         guard let central, central.state == .poweredOn, let device = peripherals[id] else {
             lastError = "设备不可用，请重新扫描"
             return
         }
-        guard peripheral == nil else { lastError = "请先断开当前控制器"; return }
-        guard !retiringPeripheralIDs.contains(id) else { lastError = "旧连接正在结束，请稍后重试"; return }
+        let name = discoveredDevices.first(where: { $0.id == id })?.name ?? device.name ?? "未命名控制器"
+        guard matchesDeviceName(name) else { lastError = "设备名称不符合 APT 过滤条件"; return }
+        requestConnection(to: device, name: name)
+    }
+
+    /// 显式重连允许解除本进程的手动断开抑制，但仍只在全局前台进行。
+    public func reconnectRememberedDevice() {
+        autoConnectionPolicy.allowManualConnection()
+        cancelAutomaticConnection()
+        guard pollingEnabled, let central, central.state == .poweredOn else {
+            lastError = "请在前台开启蓝牙后重连"
+            return
+        }
+        guard !isConnectionActive else { lastError = "请先断开当前控制器"; return }
+        guard let id = rememberedDeviceID else { lastError = "没有记忆的控制器"; return }
+        recoverRememberedDevice(id, using: central)
+    }
+
+    public func forgetDevice() {
         disconnect()
-        central.stopScan()
-        peripheral = device
-        device.delegate = self
-        prepareSession(deviceID: id, name: discoveredDevices.first(where: { $0.id == id })?.name ?? device.name ?? "未命名控制器")
-        central.connect(device, options: nil)
+        defaults.removeObject(forKey: Self.rememberedDeviceDefaultsKey)
+        defaults.removeObject(forKey: Self.rememberedDeviceNameDefaultsKey)
+        rememberedDeviceID = nil
+        rememberedDeviceName = nil
     }
 
     public func disconnect() {
-        startupConnectionConsumed = true
+        autoConnectionPolicy.suppressForRun()
+        endSession()
+    }
+
+    /// 内部退休/失败不改变用户策略；只释放本实例实际持有的 UUID。
+    private func endSession() {
+        finishAutomaticAttempt()
         stopRecording()
         central?.stopScan()
         let old = peripheral
         peripheral = nil // 先移除身份，晚到的旧会话回调不会污染新会话。
         old?.delegate = nil
         if let old, old.state != .disconnected {
+            // 退休期间仍占用 UUID，直到 cancel 的终态回调，避免电池抢连旧会话。
             retiringPeripheralIDs.insert(old.identifier)
             central?.cancelPeripheralConnection(old)
         }
+        if let id = claimedDeviceID, !retiringPeripheralIDs.contains(id) {
+            registry.release(id, for: .controller)
+        }
+        claimedDeviceID = nil
         timer?.invalidate()
         timer = nil
         characteristic = nil
         awaitingServices.removeAll()
         failedServices.removeAll()
         notificationReady = false
+        hasValidatedDevice = false
         writeSentAt = nil
         connectionDeadline = nil
         clearRealtime()
@@ -186,12 +271,25 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         state = .disconnected
     }
 
+    private func requestConnection(to device: CBPeripheral, name: String) {
+        guard !isConnectionActive || (automaticConnectionTargetID == device.identifier && connectedDeviceID == nil) else {
+            lastError = "请先断开当前控制器"
+            return
+        }
+        guard prepareSession(deviceID: device.identifier, name: name) else { return }
+        central?.stopScan()
+        peripheral = device
+        device.delegate = self
+        central?.connect(device, options: nil)
+    }
+
     /// 由 App/Root 的全局 scenePhase 管理；页面不得互相关闭共享会话。
     /// false 停止扫描/查询、清实时值/半帧并保存记录；不声明控制器后台采样。
     public func setPollingEnabled(_ enabled: Bool) {
         pollingEnabled = enabled
         if enabled { attemptStartupConnection() }
         if !enabled {
+            cancelAutomaticConnection()
             stopScan()
             stopRecording()
             clearRealtime()
@@ -257,21 +355,72 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         } catch { historyError = "记录删除失败：\(error.localizedDescription)" }
     }
 
-    /// Changing this preference does not reconnect immediately or change manual sessions.
+    /// 偏好开关不触发即时重连；关闭时取消仍未验证的自动尝试。
     public func applyDrivingSettings(_ settings: DrivingSettings) {
         startupAutoConnectEnabled = settings.controllerAutoConnectEnabled
+        if !startupAutoConnectEnabled { cancelAutomaticConnection() }
     }
 
     private func attemptStartupConnection() {
-        guard pollingEnabled, !startupConnectionConsumed, let central,
-              central.state == .poweredOn else { return }
-        startupConnectionConsumed = true
-        guard startupAutoConnectEnabled, peripheral == nil,
-              let raw = defaults.string(forKey: Self.rememberedDeviceDefaultsKey),
-              let id = UUID(uuidString: raw),
-              let target = central.retrievePeripherals(withIdentifiers: [id]).first else { return }
-        peripherals[id] = target
-        connect(to: id)
+        guard let id = consumeAutomaticTarget(poweredOn: central?.state == .poweredOn), let central else { return }
+        recoverRememberedDevice(id, using: central)
+    }
+
+    // 与无硬件 AppTests 共用同一策略路径，不将注入事件当成 CoreBluetooth 成功。
+    func consumeAutomaticTarget(poweredOn: Bool) -> UUID? {
+        guard pollingEnabled else { return nil }
+        return autoConnectionPolicy.consumeTarget(poweredOn: poweredOn, enabled: startupAutoConnectEnabled,
+            rememberedID: rememberedDeviceID, hasActiveSession: isConnectionActive || state == .scanning)
+    }
+
+    private func recoverRememberedDevice(_ id: UUID, using central: CBCentralManager) {
+        guard beginAutomaticRecovery(to: id) else { return }
+        if let target = central.retrievePeripherals(withIdentifiers: [id]).first {
+            let name = target.name ?? rememberedDeviceName ?? "未命名控制器"
+            peripherals[id] = target
+            requestConnection(to: target, name: name)
+        } else {
+            // retrieve 为空时仅接受记忆 UUID；绝不选择另一台同名/同服务设备。
+            central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        }
+    }
+
+    @discardableResult
+    func beginAutomaticRecovery(to id: UUID) -> Bool {
+        guard pollingEnabled else { lastError = "自动重连仅在前台进行"; return false }
+        guard !isConnectionActive else { lastError = "请先断开当前控制器"; return false }
+        guard !retiringPeripheralIDs.contains(id) else { lastError = "旧连接正在结束，请稍后重试"; return false }
+        guard registry.claim(id, for: .controller) else {
+            lastError = "设备已被电池服务占用"
+            return false
+        }
+        claimedDeviceID = id
+        automaticConnectionTargetID = id
+        automaticConnectionDeadline = uptime() + Self.automaticConnectionTimeout
+        lastError = nil
+        state = .scanning
+        if createsBluetoothManager {
+            automaticConnectionTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: 100_000_000) }
+                    catch { return }
+                    guard !Task.isCancelled, let self, self.automaticConnectionTargetID == id else { return }
+                    self.tick()
+                }
+            }
+        }
+        return true
+    }
+
+    private func finishAutomaticAttempt() {
+        automaticConnectionTask?.cancel()
+        automaticConnectionTask = nil
+        automaticConnectionTargetID = nil
+        automaticConnectionDeadline = nil
+    }
+
+    private func cancelAutomaticConnection() {
+        if automaticConnectionTargetID != nil { endSession() }
     }
 
     // MARK: - 会话核心（内部可测试入口；不模拟 CoreBluetooth 成功）
@@ -280,8 +429,20 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         properties.contains(.write) && (properties.contains(.notify) || properties.contains(.indicate))
     }
 
-    func prepareSession(deviceID: UUID, name: String) {
+    @discardableResult
+    func prepareSession(deviceID: UUID, name: String) -> Bool {
+        guard connectedDeviceID == nil, !retiringPeripheralIDs.contains(deviceID) else {
+            lastError = "旧连接正在结束，请稍后重试"
+            return false
+        }
+        guard registry.claim(deviceID, for: .controller) else {
+            if automaticConnectionTargetID != nil { fail("设备已被电池服务占用") }
+            else { lastError = "设备已被电池服务占用" }
+            return false
+        }
+        claimedDeviceID = deviceID
         clearRealtime()
+        hasValidatedDevice = false
         notificationReady = false
         notificationCount = 0
         frameCount = 0
@@ -298,15 +459,13 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
             RunLoop.main.add(timer, forMode: .common)
             self.timer = timer
         }
+        return true
     }
 
     func notificationsDidBecomeReady() {
         notificationReady = true
-        if createsBluetoothManager, let id = connectedDeviceID {
-            defaults.set(id.uuidString, forKey: Self.rememberedDeviceDefaultsKey)
-        }
         lastError = nil
-        connectionDeadline = nil
+        // Notify 只允许查询；首次协议有效帧才完成角色验证和连接期限。
         state = pollingEnabled ? .ready : .paused
     }
 
@@ -332,6 +491,15 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
             switch MotorControllerProtocol.parseRealtimeResponse(frame) {
             case .invalid(let error): lastError = "无效控制器帧：\(error)"
             case .valid(let telemetry):
+                if !hasValidatedDevice, let id = connectedDeviceID {
+                    hasValidatedDevice = true
+                    connectionDeadline = nil
+                    rememberedDeviceID = id
+                    rememberedDeviceName = connectedDeviceName
+                    defaults.set(id.uuidString, forKey: Self.rememberedDeviceDefaultsKey)
+                    defaults.set(connectedDeviceName, forKey: Self.rememberedDeviceNameDefaultsKey)
+                    finishAutomaticAttempt()
+                }
                 let receivedAt = clock()
                 lastValidUptime = uptime()
                 lastError = nil
@@ -359,6 +527,10 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
 
     func tick() {
         let now = uptime()
+        if let deadline = automaticConnectionDeadline, now >= deadline {
+            fail("控制器自动重连超时，请手动重连")
+            return
+        }
         if let sent = writeSentAt, now - sent >= Self.responseTimeout {
             fail("控制器查询写入未确认，已结束会话")
             return
@@ -396,7 +568,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     }
 
     private func fail(_ message: String) {
-        disconnect()
+        endSession()
         lastError = message
         state = .failed
     }
@@ -422,9 +594,8 @@ extension ControllerBluetoothService: CBCentralManagerDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.central === central else { return }
             if central.state != .poweredOn {
-                let consumed = self.startupConnectionConsumed
-                self.disconnect()
-                self.startupConnectionConsumed = consumed
+                self.endSession()
+                for id in self.retiringPeripheralIDs { self.registry.release(id, for: .controller) }
                 self.retiringPeripheralIDs.removeAll()
                 self.state = .unavailable
                 self.lastError = central.state == .unauthorized ? "未授权蓝牙访问" : "蓝牙不可用"
@@ -441,6 +612,15 @@ extension ControllerBluetoothService: CBCentralManagerDelegate {
         let rssi = RSSI.intValue
         Task { @MainActor [weak self] in
             guard let self, self.central === central, self.state == .scanning else { return }
+            self.tick()
+            guard self.pollingEnabled || self.automaticConnectionTargetID == nil,
+                  self.acceptsDiscoveredDevice(id: peripheral.identifier, name: name) else { return }
+            if let targetID = self.automaticConnectionTargetID {
+                guard peripheral.identifier == targetID else { return }
+                self.peripherals[targetID] = peripheral
+                self.requestConnection(to: peripheral, name: name)
+                return
+            }
             self.peripherals[peripheral.identifier] = peripheral
             let device = DiscoveredDevice(id: peripheral.identifier, name: name, rssi: rssi)
             self.discoveredDevices.removeAll { $0.id == device.id }
@@ -451,7 +631,7 @@ extension ControllerBluetoothService: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor [weak self] in
-            guard let self, self.peripheral === peripheral, self.state == .connecting else { return }
+            guard let self, self.central === central, self.peripheral === peripheral, self.state == .connecting else { return }
             self.state = .discovering
             peripheral.discoverServices(Self.serviceUUIDs)
         }
@@ -460,7 +640,10 @@ extension ControllerBluetoothService: CBCentralManagerDelegate {
     public nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor [weak self] in
             guard let self, self.central === central else { return }
-            if self.retiringPeripheralIDs.remove(peripheral.identifier) != nil { return }
+            if self.retiringPeripheralIDs.remove(peripheral.identifier) != nil {
+                self.registry.release(peripheral.identifier, for: .controller)
+                return
+            }
             guard self.peripheral === peripheral else { return }
             self.fail(error?.localizedDescription ?? "控制器连接失败")
         }
@@ -469,9 +652,12 @@ extension ControllerBluetoothService: CBCentralManagerDelegate {
     public nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor [weak self] in
             guard let self, self.central === central else { return }
-            if self.retiringPeripheralIDs.remove(peripheral.identifier) != nil { return }
+            if self.retiringPeripheralIDs.remove(peripheral.identifier) != nil {
+                self.registry.release(peripheral.identifier, for: .controller)
+                return
+            }
             guard self.peripheral === peripheral else { return }
-            self.disconnect()
+            self.endSession()
             self.lastError = error?.localizedDescription ?? "控制器连接已断开，请手动重连"
         }
     }

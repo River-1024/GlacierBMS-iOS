@@ -54,7 +54,7 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSBluetoothAlwaysUsageDescription: 连接 ANT BMS 读取电池状态
+        NSBluetoothAlwaysUsageDescription: 连接 ANT BMS 和电机控制器读取电池及运行状态
         NSLocationWhenInUseUsageDescription: 记录速度、里程和行程能耗
         # 阶段 2：未锁屏后台继续记录行程（D3）。配合 WhenInUse 授权，
         # 导航类标准模式；不需要「始终」授权。

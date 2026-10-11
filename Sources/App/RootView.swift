@@ -4,8 +4,8 @@ import SwiftUI
 struct RootView: View {
     enum Tab: Hashable {
         case dashboard
-        case devices
-        case detail
+        case battery
+        case controller
         case trips
         case settings
     }
@@ -19,6 +19,8 @@ struct RootView: View {
     @EnvironmentObject private var range: RangeService
 
     @State private var selection: Tab = .dashboard
+    @State private var hasStartedForeground = false
+    @State private var returnedFromBackground = false
 
     var body: some View {
         // 保持五个固定标签；第六个标签会触发 iPhone 系统 More，不能靠改文案消除。
@@ -26,12 +28,12 @@ struct RootView: View {
             DashboardView()
                 .tabItem { Label("仪表盘", systemImage: "speedometer") }
                 .tag(Tab.dashboard)
-            DeviceView()
-                .tabItem { Label("设备", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(Tab.devices)
-            BmsDetailView()
-                .tabItem { Label("详情", systemImage: "battery.100") }
-                .tag(Tab.detail)
+            BatteryView()
+                .tabItem { Label("电池", systemImage: "battery.100") }
+                .tag(Tab.battery)
+            NavigationStack { ControllerView() }
+                .tabItem { Label("控制器", systemImage: "engine.combustion") }
+                .tag(Tab.controller)
             TripHistoryView()
                 .tabItem { Label("行程", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
                 .tag(Tab.trips)
@@ -39,7 +41,10 @@ struct RootView: View {
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(Tab.settings)
         }
-        .onAppear { controller.setPollingEnabled(scenePhase == .active) }
+        .onAppear {
+            if scenePhase == .active { activateForegroundIfNeeded() }
+            else { controller.setPollingEnabled(false) }
+        }
         // 使用 Published 事件参数：willSet 阶段反读 driving.settings 会读到旧值。
         .onReceive(driving.$settings) { settings in
             appModel.colorScheme = settings.preferredColorScheme
@@ -49,8 +54,24 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { phase in
             if phase != .active { acceleration.stop(reason: "App 离开前台") }
-            controller.setPollingEnabled(phase == .active)
+            if phase == .background {
+                returnedFromBackground = true
+                bms.pauseForBackground()
+            }
+            if phase == .active { activateForegroundIfNeeded() }
+            else { controller.setPollingEnabled(false) }
         }
+    }
+
+    private func activateForegroundIfNeeded() {
+        // inactive → active（系统弹窗/控制中心）不生成新的自动重连机会。
+        if !hasStartedForeground || returnedFromBackground {
+            hasStartedForeground = true
+            returnedFromBackground = false
+            bms.beginForegroundSession()
+            controller.beginForegroundSession()
+        }
+        controller.setPollingEnabled(true)
     }
 }
 

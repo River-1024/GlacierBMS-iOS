@@ -20,7 +20,7 @@ class SettingsSourceContracts(unittest.TestCase):
     def test_five_fixed_tabs_end_in_settings(self):
         root = source("Sources/App/RootView.swift")
         self.assertEqual(re.findall(r'\.tag\(Tab\.(\w+)\)', root),
-                         ["dashboard", "devices", "detail", "trips", "settings"])
+                         ["dashboard", "battery", "controller", "trips", "settings"])
         self.assertIn('Label("设置", systemImage: "gearshape")', root)
 
     def test_range_settings_has_one_direct_hub_entry(self):
@@ -28,7 +28,7 @@ class SettingsSourceContracts(unittest.TestCase):
         self.assertEqual(hub.count("RangeSettingsView()"), 1)
         self.assertNotIn("RangeView()", hub)
         for page in ("DrivingSettingsView", "HomeParameterEditorView",
-                     "AccelerationView", "ControllerView", "LogViewerView"):
+                     "AccelerationView", "ControllerHistoryView", "LogViewerView"):
             self.assertEqual(hub.count(page + "("), 1, page)
 
     def test_range_editors_not_duplicated_in_driving(self):
