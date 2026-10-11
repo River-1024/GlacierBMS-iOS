@@ -22,6 +22,8 @@ class DashboardSourceContracts(unittest.TestCase):
         self.assertNotIn("ConnectionStatusCard", self.dashboard)
         self.assertIn(".toolbar(.hidden, for: .navigationBar)", self.dashboard)
         self.assertNotIn(".ignoresSafeArea", self.dashboard)
+        self.assertNotIn(".glassCard", self.dashboard)
+        self.assertIn('.accessibilityElement(children: .contain)\n        .accessibilityIdentifier("dashboard.slot.', self.dashboard)
 
     def test_trip_controls_only_belong_to_trip_tab(self):
         self.assertNotIn("TripControlCard", self.dashboard)

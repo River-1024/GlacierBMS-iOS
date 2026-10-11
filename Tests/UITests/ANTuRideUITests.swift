@@ -132,6 +132,9 @@ final class ANTuRideUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["range.reason"].exists)
         XCTAssertFalse(app.textFields["range.capacity"].exists)
         XCTAssertFalse(app.buttons["窗口、容量与重置"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(results.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.navigationBars.count, 0, "Returning to Dashboard must hide the whole navigation bar")
     }
 
     func testRangeDefaultsRequireConfirmationAndPreserveDrivingPreferences() {

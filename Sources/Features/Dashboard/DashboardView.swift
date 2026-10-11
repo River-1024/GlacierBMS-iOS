@@ -43,6 +43,7 @@ struct DashboardView: View {
                                 LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                                     ForEach(homeConfig.visibleCardIDs) { id in
                                         parameterCard(id, freshness: freshness)
+                                            .accessibilityElement(children: .contain)
                                             .accessibilityIdentifier("dashboard.card.\(id.rawValue)")
                                     }
                                 }
@@ -271,6 +272,8 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // 单独的无障碍容器避免卡片标识传播覆盖内部续航按钮，保留按钮语义。
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("dashboard.slot.\(assignment.slotId)")
     }
 
@@ -397,7 +400,7 @@ private struct StatusChipsCard: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
-        .glassCard(cornerRadius: 16)
+        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .opacity(isStale ? 0.7 : 1)
     }
 
