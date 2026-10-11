@@ -1,6 +1,6 @@
 # 安途（ANTuRide）原生 iOS 首版总体规划与施工进度
 
-> 更新时间：2026-10-10 18:24:39 +08:00
+> 更新时间：2026-10-11 15:06:00 +08:00
 > 状态：用户要求继续完成全部后续阶段并复核安卓版复刻。G3 与阶段 3/4 正在按纯领域 → 服务 → UI → macOS/真机验收顺序推进；当前已建立安卓版差异矩阵，任何未经过 macOS/iPhone/车辆验证的能力不标记为完成。
 > 目标：使用 SwiftUI + CoreBluetooth 建立一款可由个人签名安装的原生 iOS 驾驶仪表盘。
 
@@ -575,3 +575,18 @@ xcodebuild -project ANTuRide.xcodeproj \
 ## 本轮实施状态（北京时间 2026-10-11 14:05:05 +08:00）
 
 Dashboard 减项、行程 Tab 归位、根页隐藏导航栏与 Swift Charts 迁移已落地到当前工作树；验证状态以 `docs/CONSTRUCTION_LOG.md` 步骤 036 为准。新增源码级契约和图表点生成测试尚未经过 macOS Xcode 编译/模拟器执行；不得将 Windows 语法检查视为 iOS UI 验收。
+
+
+## 最新 UI 批次交付（北京时间 2026-10-11 15:06:00 +08:00）
+
+设置五 Tab、唯一续航编辑入口、Dashboard 根页整栏隐藏/高密度自适应、行程归位和 Swift Charts 已提交，并通过本批准确源码 macOS CI。此前“未提交/未生成新 IPA”为历史状态，以本节及施工步骤 037–039 为准。
+
+- 构建源码：`414d8b0a188767796dc58901ab7bfe583ffdafba`（`414d8b0`）；分支 `codex/ios-parity-20261010`。后续文档提交不改变源码，本 IPA 不宣称基于文档提交重新构建。
+- GitHub Actions：Run `38119495743`，结论 `success`；2026-10-11 14:52:52 +08:00 启动，14:59:25 +08:00 完成。准确 headSha 已核对；Xcode 26.3 / Swift 6.2.4。
+- 测试：SwiftPM 130 项、iOS XCTest 280 项、XCUITest 9 项，全部零失败；Release 设备构建、资源校验、产物上传全部成功。
+- CI 源码契约：Dashboard 6/6；设置 4 项通过、2 项 Android 对照因独立 checkout 无父仓库明确跳过。本机设置 6/6（含 Android 对照）和 Dashboard 6/6 已通过。
+- IPA：`build/ci/414d8b0/ANTuRide-unsigned.ipa`；`build/ci/latest/ANTuRide-unsigned.ipa` 为字节一致副本。大小 `2210282` 字节，SHA-256 `1999c55ec46705c9b26d0b0b70668eba9a315445ac9254400520e5afc0b86ef3`。
+- 校验：ZIP 全部条目 CRC 通过；主二进制、Assets.car、PrivacyInfo.xcprivacy、AppIcon 存在；标识 `com.zjsf.anturide`、显示名“安途”、版本 0.1.0 (1)；无 embedded.mobileprovision 和 _CodeSignature 目录，产物为 unsigned，需要另行签名后安装。
+- 本地证据：版本目录和 latest 均保存 `run.json`、`ci.log`、`artifact-verification.json`，均在忽略的 build 目录，不提交二进制/日志。
+
+本批已完成源码/CI/产物交付；真实 iPhone 安装与 UI/VoiceOver/BMS/车辆验收仍待验证，不将 Android 差异清单整体标记完成。

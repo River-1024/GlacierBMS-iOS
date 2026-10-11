@@ -197,3 +197,18 @@ xcodebuild test \
 - 真实车辆仪表盘数据核验。
 
 GitHub 构建通过仅代表工程可编译、可测试，不构成设备已验证。
+
+
+## 9. 设置与 Dashboard UI 批次（北京时间 2026-10-11 15:06:00 +08:00）
+
+- 构建源码：`414d8b0a188767796dc58901ab7bfe583ffdafba`（`414d8b0`）；分支 `codex/ios-parity-20261010`。后续文档提交不改变源码，本 IPA 不宣称基于文档提交重新构建。
+- GitHub Actions：Run `38119495743`，结论 `success`；2026-10-11 14:52:52 +08:00 启动，14:59:25 +08:00 完成。准确 headSha 已核对；Xcode 26.3 / Swift 6.2.4。
+- 测试：SwiftPM 130 项、iOS XCTest 280 项、XCUITest 9 项，全部零失败；Release 设备构建、资源校验、产物上传全部成功。
+- CI 源码契约：Dashboard 6/6；设置 4 项通过、2 项 Android 对照因独立 checkout 无父仓库明确跳过。本机设置 6/6（含 Android 对照）和 Dashboard 6/6 已通过。
+- IPA：`build/ci/414d8b0/ANTuRide-unsigned.ipa`；`build/ci/latest/ANTuRide-unsigned.ipa` 为字节一致副本。大小 `2210282` 字节，SHA-256 `1999c55ec46705c9b26d0b0b70668eba9a315445ac9254400520e5afc0b86ef3`。
+- 校验：ZIP 全部条目 CRC 通过；主二进制、Assets.car、PrivacyInfo.xcprivacy、AppIcon 存在；标识 `com.zjsf.anturide`、显示名“安途”、版本 0.1.0 (1)；无 embedded.mobileprovision 和 _CodeSignature 目录，产物为 unsigned，需要另行签名后安装。
+- 本地证据：版本目录和 latest 均保存 `run.json`、`ci.log`、`artifact-verification.json`，均在忽略的 build 目录，不提交二进制/日志。
+
+首轮 `21b0127` / Run `38118261599`：App 编译与 280 单测通过，9 UI 测试发生 2 个断言失败（同一续航入口案例），因此不产包。修复父卡片无障碍容器后第二轮全部成功，并额外验证续航详情返回根页无导航栏；完整过程见施工步骤 037–039。
+
+复现下载：`scripts/fetch-ipa.sh -r 38119495743`。当前原始产物无签名，需要用户个人签名，不新增或提交签名材料。

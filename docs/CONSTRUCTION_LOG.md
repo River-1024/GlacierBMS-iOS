@@ -391,3 +391,27 @@
 - 修复：为槽位和旧卡片容器使用 `.accessibilityElement(children: .contain)`，保留父卡片标识和内部按钮标识/语义，不削弱测试为按标签绕过。续航 UI 回归增加返回 Dashboard 后按钮仍在且导航栏全部隐藏的断言。
 - 设计审计附带收敛：旧布局的状态内容卡使用 `AppTheme.card` 普通背景，移除不符合内容层约束的玻璃材质。未改 BLE/行程协议或隐私边界。
 - 后续：本地契约/语法检查后提交推送修复，运行完整 CI，准确源码 SHA 和产物结果在下一步骤记录。后续进度文档将在最终文档提交中一并推送，不把它声称已包含在首轮源码提交中。
+
+- 修复提交 `414d8b0a188767796dc58901ab7bfe583ffdafba` 已发布到同一远程分支（北京时间 2026-10-11 14:53:53 +08:00）。普通 HTTPS Git 推送连续遇连接重置/443 连接失败，改用已认证 GitHub Git database API 上传完全相同的 blob/tree/commit；逐个核对 SHA 与本地对象完全相同，只做非 force 快进，不重写历史。
+- 第二轮 Run `38119495743` 已启动并核对 headSha 为 `414d8b0`；项目生成及两组源码契约通过，完整测试/设备构建继续中。
+
+
+## 步骤 039：完整 CI 成功、IPA 交付与文档收尾（北京时间 2026-10-11 15:06:00 +08:00）
+
+### 准确版本与验证证据
+
+- 构建源码：`414d8b0a188767796dc58901ab7bfe583ffdafba`（`414d8b0`）；分支 `codex/ios-parity-20261010`。后续文档提交不改变源码，本 IPA 不宣称基于文档提交重新构建。
+- GitHub Actions：Run `38119495743`，结论 `success`；2026-10-11 14:52:52 +08:00 启动，14:59:25 +08:00 完成。准确 headSha 已核对；Xcode 26.3 / Swift 6.2.4。
+- 测试：SwiftPM 130 项、iOS XCTest 280 项、XCUITest 9 项，全部零失败；Release 设备构建、资源校验、产物上传全部成功。
+- CI 源码契约：Dashboard 6/6；设置 4 项通过、2 项 Android 对照因独立 checkout 无父仓库明确跳过。本机设置 6/6（含 Android 对照）和 Dashboard 6/6 已通过。
+- IPA：`build/ci/414d8b0/ANTuRide-unsigned.ipa`；`build/ci/latest/ANTuRide-unsigned.ipa` 为字节一致副本。大小 `2210282` 字节，SHA-256 `1999c55ec46705c9b26d0b0b70668eba9a315445ac9254400520e5afc0b86ef3`。
+- 校验：ZIP 全部条目 CRC 通过；主二进制、Assets.car、PrivacyInfo.xcprivacy、AppIcon 存在；标识 `com.zjsf.anturide`、显示名“安途”、版本 0.1.0 (1)；无 embedded.mobileprovision 和 _CodeSignature 目录，产物为 unsigned，需要另行签名后安装。
+- 本地证据：版本目录和 latest 均保存 `run.json`、`ci.log`、`artifact-verification.json`，均在忽略的 build 目录，不提交二进制/日志。
+
+### UI 回归覆盖与验收边界
+
+- 本次 UI 测试实际通过：Dashboard 无导航栏/无行程按钮、Trips 有开始入口、最大辅助字号横屏可滚动至底部控制器故障槽位、五 Tab 可见、设置入口与唯一续航编辑器、续航恢复默认确认/取消、续航入口进入详情并返回后根页整条导航栏仍隐藏、空历史/保存行程导航。
+- 280 项 App 测试包含新 7 项图表点生成边界测试和 4 项设置回归。没有把等待样本、零/负值、缺失与断点改成模拟曲线；图表的真实硬件数据渲染仍待真机验收。
+- macOS 模拟器通过不代表所有 iPhone 屏幕、VoiceOver、减少动态效果、真实 BMS 通信、断连/过期行为、锁屏行程或车辆安全验收；前批安装反馈也不证明本批安装成功。
+- GitHub 工作流有 actions v4 的 Node.js 20 兼容/强制 Node.js 24 提示和 macOS 容量提示，不影响本次成功；本次不额外升级依赖。
+- 最终文档提交将同步 README、总体进度、CI 证据、差异矩阵与设计规则，记录首轮失败/第二轮成功，不修改此次已构建源码。
