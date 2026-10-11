@@ -51,3 +51,13 @@
 实现入口：BatteryView、ControllerView、ControllerHistoryView、BluetoothDevicesView、BluetoothDevicePolicy 及两个独立 BLE 服务。删除旧 DeviceView/BmsDetailView 入口，设计主约束和 README 已按新五 Tab 更新。
 
 注意：当前检查能证明源码结构/契约符合预期，不能证明 Swift 类型正确或真实蓝牙可靠；历史 CI/IPA 不包含本次未提交改动。
+
+### 最新实现与 macOS CI 交付（北京时间 2026-10-11 22:34:47 +08:00）
+
+之前“未提交、未推送、未生成 IPA”的记录是当时状态，现由本节更新：
+
+- 源码提交 `01aec26313dad2eece77f5db431c6e7c61986f8a`（`01aec26`）已推送到 `codex/ios-parity-20261010`。五 Tab、电池/控制器详情分离、设置内独立 BLE 管理、按角色名称过滤、有限自动连接、独立断开/忘记、控制器二级历史均已实现。
+- GitHub Actions Run `38147063235` 对应精确源码 SHA 且成功。SwiftPM 137 项、iOS XCTest 327 项、XCUITest 12 项零失败；Release unsigned 构建、资源校验、产物上传成功。
+- macOS CI 解决此前 Windows 无法进行 Swift 类型检查/模拟器测试的验证缺口；它仍不验证真实 CoreBluetooth 环境。
+- IPA `build/ci/01aec26/ANTuRide-unsigned.ipa`，大小 2,247,761 字节，SHA-256 `95476b8eb519d0984732383d2d70ed8d5836ada32eca6058a6a5169d24d5943c`；unsigned，需要个人签名。Run 与产物证据见 `build/ci/01aec26/` 和 `build/ci/latest/`。
+- 真机验收仍待完成：签名安装、两台设备并发、各自断开/忘记和自动重连、后台/前台与权限行为、VoiceOver/小屏及车辆数据。

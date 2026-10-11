@@ -590,3 +590,9 @@ Dashboard 减项、行程 Tab 归位、根页隐藏导航栏与 Swift Charts 迁
 - 本地证据：版本目录和 latest 均保存 `run.json`、`ci.log`、`artifact-verification.json`，均在忽略的 build 目录，不提交二进制/日志。
 
 本批已完成源码/CI/产物交付；真实 iPhone 安装与 UI/VoiceOver/BMS/车辆验收仍待验证，不将 Android 差异清单整体标记完成。
+
+## 电池与控制器分离实施状态（北京时间 2026-10-11 22:34:47 +08:00）
+
+方案已实现并通过 macOS CI，不再是待施工项。源码 `01aec26` 已推送；Run `38147063235` 精确 SHA 成功，SwiftPM 137、iOS 测试 327、UI 测试 12 均零失败，unsigned IPA 已下载校验。产品行为与设备端验收清单见 `docs/BATTERY_CONTROLLER_SEPARATION.md`；IPA/日志/Run 证据见 `build/ci/01aec26/`。
+
+未完成项仅为需要真实 iPhone/BLE/车辆的验收；未签名 IPA 必须先用个人证书签名。文档提交不改变已构建源码，也不意味着对文档版本重新构建。

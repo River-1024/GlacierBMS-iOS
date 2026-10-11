@@ -212,3 +212,14 @@ GitHub 构建通过仅代表工程可编译、可测试，不构成设备已验�
 首轮 `21b0127` / Run `38118261599`：App 编译与 280 单测通过，9 UI 测试发生 2 个断言失败（同一续航入口案例），因此不产包。修复父卡片无障碍容器后第二轮全部成功，并额外验证续航详情返回根页无导航栏；完整过程见施工步骤 037–039。
 
 复现下载：`scripts/fetch-ipa.sh -r 38119495743`。当前原始产物无签名，需要用户个人签名，不新增或提交签名材料。
+
+## 10. 电池/控制器分离批次（北京时间 2026-10-11 22:34:47 +08:00）
+
+- 构建源码：`01aec26313dad2eece77f5db431c6e7c61986f8a`（`01aec26`），分支 `codex/ios-parity-20261010`；后续文档提交不改变此构建源码。
+- GitHub Actions Run `38147063235`（workflow_dispatch）成功，Run head SHA 已与源码完全核对。macOS runner 使用 Xcode 26.3 / Swift 6.2.4。
+- 验证：源码契约通过；SwiftPM 137 项、iOS XCTest 327 项、XCUITest 12 项均零失败；Release 设备构建、bundle 检查、IPA 上传均通过。
+- 前序 Run `38145563196` 在 UI 测试阶段失败，没有产包；修正 UI 自动化对 Toggle 的点按/等待和记忆设备 `LabeledContent` 的稳定无障碍查询后，本 Run 全部通过。
+- 产物：`build/ci/01aec26/ANTuRide-unsigned.ipa`，2,247,761 字节，SHA-256 `95476b8eb519d0984732383d2d70ed8d5836ada32eca6058a6a5169d24d5943c`；`build/ci/latest/ANTuRide-unsigned.ipa` 与其哈希一致。ZIP CRC、包标识/显示名/图标、Assets.car、PrivacyInfo.xcprivacy 均核验通过。无 provisioning profile、`_CodeSignature` 和 Mach-O 签名数据，属于 unsigned IPA，须自行签名安装。
+- 本机静态检查：蓝牙契约 10/10、设置 6/6、Dashboard 6/6、`git diff --check` 通过。
+- Run 元数据、CI 完整日志、产物校验报告和 IPA 保存在忽略目录 `build/ci/01aec26/` 及 `build/ci/latest/`；不提交生成物或签名材料。
+- 尚未完成真实 iPhone 安装、双 BLE 并发与独立断开/重连、VoiceOver 和车辆验收；不能用模拟器结果替代硬件结论。

@@ -415,3 +415,14 @@
 - macOS 模拟器通过不代表所有 iPhone 屏幕、VoiceOver、减少动态效果、真实 BMS 通信、断连/过期行为、锁屏行程或车辆安全验收；前批安装反馈也不证明本批安装成功。
 - GitHub 工作流有 actions v4 的 Node.js 20 兼容/强制 Node.js 24 提示和 macOS 容量提示，不影响本次成功；本次不额外升级依赖。
 - 最终文档提交将同步 README、总体进度、CI 证据、差异矩阵与设计规则，记录首轮失败/第二轮成功，不修改此次已构建源码。
+
+## 步骤 040：电池/控制器分离实现与签名外 IPA 交付（北京时间 2026-10-11 22:34:47 +08:00）
+
+- 落地五个 Tab（仪表盘/电池/控制器/行程/设置）；电池与控制器数据详情隔离，连接管理统一到设置的蓝牙设备页，两角色各自过滤、记忆 UUID、自动连接、断开及忘记；控制器历史/导出保留在二级页面。
+- 构建源码提交 `01aec26313dad2eece77f5db431c6e7c61986f8a`（`01aec26`），已推送至 `codex/ios-parity-20261010`。后续本步骤文档提交不修改源码，不重建 IPA。
+- Run `38145563196`（源码 `92a631e`）SwiftPM 通过，但两项 UI 断言未通过，因此未生成包。复核为 UI 自动化应点按 Toggle 实际控件区域并等待状态变化，另一项查询与 `LabeledContent` 的无障碍元素类型不匹配；修订测试点按及状态等待，并给记忆设备行增加稳定无障碍标识。
+- 后续准确源码 Run `38147063235`（workflow_dispatch，head SHA 与 `01aec26` 完全一致）全部成功：SwiftPM 137 项、模拟器 iOS 测试 327 项、XCUITest 12 项，零失败；Release 设备构建、bundle 校验和 IPA 上传均通过。Xcode 26.3 / Swift 6.2.4。
+- 下载并校验产物：`build/ci/01aec26/ANTuRide-unsigned.ipa`，2,247,761 字节，SHA-256 `95476b8eb519d0984732383d2d70ed8d5836ada32eca6058a6a5169d24d5943c`。ZIP CRC 正常；bundle ID `com.zjsf.anturide`、显示名“安途”、版本 0.1.0 (1)；Assets.car、AppIcon、PrivacyInfo.xcprivacy 齐全；没有嵌入 provisioning profile、`_CodeSignature` 或 Mach-O 签名数据，确认为 unsigned。`build/ci/latest/` 的 IPA SHA 相同。
+- 证据 `run.json`、完整 `ci.log`、`artifact-verification.json` 与两个 IPA 均保存在被忽略的 `build/ci/01aec26/`、`build/ci/latest/`，不进入 Git。
+- 本地三个静态契约检查：蓝牙 10/10、设置 6/6、Dashboard 6/6；`git diff --check` 通过。此为 Windows 静态检查；Xcode 编译/测试证据来自上述 macOS CI。
+- 尚待真实 iPhone：签名安装、实际双 BLE 同时连接/独立断开/自动重连、权限和前后台行为、VoiceOver 与车辆数据核验。CI 通过和 unsigned IPA 生成不等于硬件验收。未修改 Android 父仓库。

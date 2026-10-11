@@ -1,6 +1,6 @@
 # ANTuRide iOS（安途）
 
-原生 SwiftUI iOS 首版，面向个人签名安装。项目目标是通过 CoreBluetooth 连接 ANT BMS，提供驾驶仪表盘、GPS 速度、实时电池状态和后续行程/续航能力。
+原生 SwiftUI iOS 首版，面向个人签名安装。通过 CoreBluetooth 独立连接 ANT BMS 与电机控制器，提供驾驶仪表盘、GPS 速度、电池/控制器实时数据、行程与续航能力。
 
 ## 隐私边界
 
@@ -82,3 +82,13 @@ build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
 - 首页删除标题/顶部导航栏空白、独立 BMS 连接卡与行程控制；保留高密度 27 槽位/旧偏好，连续滚动且尊重系统安全区；行程控制归位行程 Tab，曲线使用 Swift Charts。
 - IPA：`build/ci/414d8b0/ANTuRide-unsigned.ipa`，latest 已同步；2210282 字节，SHA-256 `1999c55ec46705c9b26d0b0b70668eba9a315445ac9254400520e5afc0b86ef3`。原始包 unsigned，需要签名后安装。
 - 完整进度、首轮 UI 测试失败与修复、证据和待真机验收见 `docs/CONSTRUCTION_LOG.md` 步骤 037–039、`docs/CI_BUILD_RESULTS.md` §9。后续文档提交不改变已构建源码，不表示重新构建了文档提交。
+
+## 电池/控制器分离与最新 IPA（北京时间 2026-10-11 22:34:47 +08:00）
+
+本节更新并取代上面的旧 IPA 批次状态：电池与控制器独立展示、独立名称过滤/记忆/自动连接；扫描、手动连接、断开和忘记统一在“设置 → 蓝牙设备”。控制器记录与导出位于二级页。
+
+- 源码已提交并推送到 `codex/ios-parity-20261010`，构建源码提交 `01aec26313dad2eece77f5db431c6e7c61986f8a`（`01aec26`）。
+- GitHub Actions Run `38147063235` 对应 SHA 完全一致且成功；Xcode 26.3 / Swift 6.2.4。SwiftPM 137 项、iOS 测试 327 项、XCUITest 12 项全部零失败；Release unsigned 设备构建、包检查和上传成功。
+- IPA：`build/ci/01aec26/ANTuRide-unsigned.ipa`；`build/ci/latest/ANTuRide-unsigned.ipa` 为校验后副本。2,247,761 字节，SHA-256 `95476b8eb519d0984732383d2d70ed8d5836ada32eca6058a6a5169d24d5943c`。
+- IPA 未签名、无 provisioning profile，须用个人 Apple 开发者签名后安装。模拟器和 CI 不代表真实 iPhone 双设备 BLE、独立断开/重连或车辆验收通过。
+- 详细实施、失败修复及证据见 `docs/CONSTRUCTION_LOG.md` 步骤 040、`docs/CI_BUILD_RESULTS.md` §10 和 `docs/BATTERY_CONTROLLER_SEPARATION.md`。后续文档提交不改变已构建源码，也不声称重新构建。
