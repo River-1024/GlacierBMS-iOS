@@ -60,6 +60,92 @@ public struct TripStore {
         AppLog.location.info("行程已删除：\(id.uuidString)")
     }
 
+    enum ExportFormat: String {
+        case json, csv
+    }
+
+    /// 分享的是独立持久化快照，不依赖 save 成功，也不随 sheet 关闭或行程删除清理。
+    /// 自定义导出目录用于测试；默认 Documents/Exports，与原始 Trips 目录分离。
+    func export(_ trip: Trip, format: ExportFormat, to exportDirectory: URL? = nil) throws -> URL {
+        let destination = exportDirectory ?? FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask
+        )[0].appendingPathComponent("Exports", isDirectory: true)
+        let data: Data
+        switch format {
+        case .json:
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            // 保留原有 JSON 日期编码与 schema，可直接用原 JSONDecoder 往返。
+            data = try encoder.encode(trip)
+        case .csv:
+            data = Self.sampleCSV(trip)
+        }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let url = destination.appendingPathComponent(
+            "trip-\(trip.id.uuidString)-\(UUID().uuidString).\(format.rawValue)"
+        )
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// 只切当前页；不 flatten 整个行程，保留区间内原始样本顺序与索引。
+    /// 页码从 0 开始；过界页夹到首/末页，空档案返回空范围。
+    static func pageRange(count: Int, page: Int, pageSize: Int = 100) -> Range<Int> {
+        guard count > 0 else { return 0..<0 }
+        let size = max(1, pageSize)
+        let lastPage = (count - 1) / size
+        let start = min(max(0, page), lastPage) * size
+        return start..<(start + min(size, count - start))
+    }
+
+    /// RFC 4180：引号加倍，含逗号/引号/CR/LF 的单元格加引号，行以 CRLF 分隔。
+    static func csvRow(_ fields: [String]) -> String {
+        fields.map { value in
+            guard value.contains(",") || value.contains("\"") || value.contains("\r") || value.contains("\n") else {
+                return value
+            }
+            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }.joined(separator: ",") + "\r\n"
+    }
+
+    private static func sampleCSV(_ trip: Trip) -> Data {
+        let dates = ISO8601DateFormatter()
+        dates.timeZone = TimeZone(secondsFromGMT: 0)
+        dates.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func date(_ value: Date?) -> String { value.map { dates.string(from: $0) } ?? "" }
+        func number(_ value: Double?) -> String {
+            guard let value, value.isFinite else { return "" }
+            return String(value)
+        }
+        func validity(_ value: Bool?) -> String { value.map { $0 ? "true" : "false" } ?? "" }
+        let headers = [
+            "trip_id", "trip_started_at", "trip_ended_at", "segment_index", "segment_kind",
+            "segment_started_at", "segment_ended_at", "sample_index", "timestamp",
+            "gps_valid", "bms_valid", "latitude", "longitude", "speed_meters_per_second",
+            "voltage_volts", "current_amps", "power_watts", "location_interval_seconds",
+            "distance_meters", "energy_interval_seconds", "energy_wh"
+        ]
+        var data = Data(csvRow(headers).utf8)
+        let tripFields = [trip.id.uuidString, date(trip.startedAt), date(trip.endedAt)]
+        for (segmentIndex, segment) in trip.segments.enumerated() {
+            let segmentFields = tripFields + [String(segmentIndex + 1), segment.kind.rawValue,
+                                             date(segment.startedAt), date(segment.endedAt)]
+            // nil/空 samples 都不补造行；暂停/缺口仍由 segment_index 的跳号保留边界。
+            for (sampleIndex, sample) in (segment.samples ?? []).enumerated() {
+                let fields = segmentFields + [
+                    String(sampleIndex + 1), date(sample.timestamp),
+                    validity(sample.gpsValid), validity(sample.bmsValid),
+                    number(sample.latitude), number(sample.longitude), number(sample.speedMetersPerSecond),
+                    number(sample.voltageVolts), number(sample.currentAmps), number(sample.powerWatts),
+                    number(sample.locationIntervalSeconds), number(sample.distanceMeters),
+                    number(sample.energyIntervalSeconds), number(sample.energyWh)
+                ]
+                data.append(contentsOf: csvRow(fields).utf8)
+            }
+        }
+        return data
+    }
+
     private static func fileURL(for id: UUID, in directory: URL) -> URL {
         directory.appendingPathComponent("\(id.uuidString).json")
     }

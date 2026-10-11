@@ -7,6 +7,14 @@ import Foundation
 public struct ControllerTelemetrySnapshot: Equatable, Sendable {
     public let receivedAt: Date
     public let telemetry: MotorControllerTelemetry
+    /// Several complete frames arrived together; their measurement interval is unknown.
+    public let timingAmbiguous: Bool
+
+    public init(receivedAt: Date, telemetry: MotorControllerTelemetry, timingAmbiguous: Bool = false) {
+        self.receivedAt = receivedAt
+        self.telemetry = telemetry
+        self.timingAmbiguous = timingAmbiguous
+    }
 }
 
 /// 控制器专用只读会话，不复用 BMS 的 FFE1 特征或 ANT 查询。
@@ -60,12 +68,17 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     @Published public private(set) var frameCount = 0
     @Published public private(set) var isRecording = false
     @Published public private(set) var recordedSampleCount = 0
+    @Published public private(set) var recordingTimingWarning: String?
     @Published public private(set) var recordingSecondsRemaining = 0
     @Published public private(set) var pendingRecord: ControllerHistoryRecord?
     @Published public private(set) var historyRecords: [ControllerHistoryRecord] = []
     @Published public private(set) var historyError: String?
     public let historyStore: ControllerHistoryStore
 
+    static let rememberedDeviceDefaultsKey = "com.zjsf.anturide.controller.lastPeripheralUUID"
+    private let defaults: UserDefaults
+    private var startupAutoConnectEnabled: Bool
+    private var startupConnectionConsumed = false
     private var central: CBCentralManager?
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
@@ -90,14 +103,19 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     private var recordDeviceID: UUID?
     private var recordDeviceName = ""
 
-    public convenience init(historyStore: ControllerHistoryStore = ControllerHistoryStore()) {
+    public convenience init(historyStore: ControllerHistoryStore = ControllerHistoryStore(),
+                            defaults: UserDefaults = .standard, startupAutoConnectEnabled: Bool = true) {
         self.init(historyStore: historyStore, clock: Date.init,
-                  uptime: { ProcessInfo.processInfo.systemUptime }, createsBluetoothManager: true)
+                  uptime: { ProcessInfo.processInfo.systemUptime }, createsBluetoothManager: true,
+                  defaults: defaults, startupAutoConnectEnabled: startupAutoConnectEnabled)
     }
 
     /// 可注入时钟且不创建蓝牙管理器，AppTests 因而不会触发权限或扫描真机。
     init(historyStore: ControllerHistoryStore, clock: @escaping () -> Date,
-         uptime: @escaping () -> TimeInterval, createsBluetoothManager: Bool) {
+         uptime: @escaping () -> TimeInterval, createsBluetoothManager: Bool,
+         defaults: UserDefaults = .standard, startupAutoConnectEnabled: Bool = true) {
+        self.defaults = defaults
+        self.startupAutoConnectEnabled = startupAutoConnectEnabled
         self.historyStore = historyStore
         self.clock = clock
         self.uptime = uptime
@@ -107,6 +125,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     }
 
     public func startScan() {
+        startupConnectionConsumed = true
         guard let central, central.state == .poweredOn else {
             lastError = "蓝牙未开启或未授权"
             return
@@ -127,6 +146,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     }
 
     public func connect(to id: UUID) {
+        startupConnectionConsumed = true
         guard let central, central.state == .poweredOn, let device = peripherals[id] else {
             lastError = "设备不可用，请重新扫描"
             return
@@ -142,6 +162,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     }
 
     public func disconnect() {
+        startupConnectionConsumed = true
         stopRecording()
         central?.stopScan()
         let old = peripheral
@@ -169,6 +190,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
     /// false 停止扫描/查询、清实时值/半帧并保存记录；不声明控制器后台采样。
     public func setPollingEnabled(_ enabled: Bool) {
         pollingEnabled = enabled
+        if enabled { attemptStartupConnection() }
         if !enabled {
             stopScan()
             stopRecording()
@@ -188,6 +210,7 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         recordDeviceID = id
         recordDeviceName = connectedDeviceName ?? "未命名控制器"
         recordedSampleCount = 0
+        recordingTimingWarning = nil
         recordingSecondsRemaining = Int(Self.recordingDuration)
         historyError = nil
         isRecording = true
@@ -201,7 +224,8 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         let samples = session.finish()
         let endedAt = max(max(clock(), samples.last?.timestamp ?? startedAt), startedAt)
         pendingRecord = ControllerHistoryRecord(deviceID: deviceID, deviceName: recordDeviceName,
-                                                startedAt: startedAt, endedAt: endedAt, samples: samples)
+                                                startedAt: startedAt, endedAt: endedAt, samples: samples,
+                                                timingWarning: recordingTimingWarning)
         isRecording = false
         recordSession = nil
         recordDeadline = nil
@@ -233,6 +257,23 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
         } catch { historyError = "记录删除失败：\(error.localizedDescription)" }
     }
 
+    /// Changing this preference does not reconnect immediately or change manual sessions.
+    public func applyDrivingSettings(_ settings: DrivingSettings) {
+        startupAutoConnectEnabled = settings.controllerAutoConnectEnabled
+    }
+
+    private func attemptStartupConnection() {
+        guard pollingEnabled, !startupConnectionConsumed, let central,
+              central.state == .poweredOn else { return }
+        startupConnectionConsumed = true
+        guard startupAutoConnectEnabled, peripheral == nil,
+              let raw = defaults.string(forKey: Self.rememberedDeviceDefaultsKey),
+              let id = UUID(uuidString: raw),
+              let target = central.retrievePeripherals(withIdentifiers: [id]).first else { return }
+        peripherals[id] = target
+        connect(to: id)
+    }
+
     // MARK: - 会话核心（内部可测试入口；不模拟 CoreBluetooth 成功）
 
     static func supportsControllerProperties(_ properties: CBCharacteristicProperties) -> Bool {
@@ -261,6 +302,9 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
 
     func notificationsDidBecomeReady() {
         notificationReady = true
+        if createsBluetoothManager, let id = connectedDeviceID {
+            defaults.set(id.uuidString, forKey: Self.rememberedDeviceDefaultsKey)
+        }
         lastError = nil
         connectionDeadline = nil
         state = pollingEnabled ? .ready : .paused
@@ -292,19 +336,18 @@ public final class ControllerBluetoothService: NSObject, ObservableObject {
                 lastValidUptime = uptime()
                 lastError = nil
                 if isRecording, let session = recordSession {
-                    // 同一通知可含多个整帧；以最小可表示增量保留本地接收顺序。
-                    var sampleAt = receivedAt
-                    if let last = session.samples.last, sampleAt <= last.timestamp {
-                        sampleAt = Date(timeIntervalSince1970: last.timestamp.timeIntervalSince1970.nextUp)
-                    }
+                    // Preserve observed reception timestamps. Duplicate/backwards times cannot be
+                    // ordered safely: skip that row and retain an explicit quality warning.
+                    let sampleAt = receivedAt
                     let sample = ControllerSample(timestamp: sampleAt,
                         voltage: telemetry.controllerVoltageV, current: telemetry.busCurrentA,
                         rpm: telemetry.rpm, speed: .nan, throttle: telemetry.throttleVoltageV,
-                        brake: telemetry.linearBrakeVoltageV ?? .nan)
+                        brake: telemetry.linearBrakeVoltageV ?? .nan, telemetry: telemetry)
                     if session.append(sample) { recordedSampleCount = session.count }
+                    else { recordingTimingWarning = "同批重复或倒退接收时间的样本已跳过；未生成虚假帧间时间。" }
                 }
                 // 校验 -> 更新在途/时效 -> 追加记录 -> 一次发布 telemetry + 接收时间。
-                latestSnapshot = ControllerTelemetrySnapshot(receivedAt: receivedAt, telemetry: telemetry)
+                latestSnapshot = ControllerTelemetrySnapshot(receivedAt: receivedAt, telemetry: telemetry, timingAmbiguous: frames.count > 1)
             }
         }
     }
@@ -379,11 +422,16 @@ extension ControllerBluetoothService: CBCentralManagerDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.central === central else { return }
             if central.state != .poweredOn {
+                let consumed = self.startupConnectionConsumed
                 self.disconnect()
+                self.startupConnectionConsumed = consumed
                 self.retiringPeripheralIDs.removeAll()
                 self.state = .unavailable
                 self.lastError = central.state == .unauthorized ? "未授权蓝牙访问" : "蓝牙不可用"
-            } else if self.state == .unavailable { self.state = .idle; self.lastError = nil }
+            } else {
+                if self.state == .unavailable { self.state = .idle; self.lastError = nil }
+                self.attemptStartupConnection()
+            }
         }
     }
 

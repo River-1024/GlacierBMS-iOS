@@ -183,7 +183,7 @@ final class ControllerBluetoothServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testMultipleFramesInOneNotificationKeepStrictlyOrderedRecordingRows() throws {
+    func testMultipleFramesWithIdenticalReceiptTimeSkipAmbiguousRowsWithoutInventingTime() throws {
         try withService { service, _ in
             ready(service)
             receive(service)
@@ -191,11 +191,13 @@ final class ControllerBluetoothServiceTests: XCTestCase {
             _ = service.nextQuery()
             service.queryWriteDidComplete()
             service.receiveNotification(response() + response())
-            XCTAssertEqual(service.recordedSampleCount, 2)
+            XCTAssertEqual(service.recordedSampleCount, 1)
+            XCTAssertNotNil(service.recordingTimingWarning)
             service.stopRecording()
             let samples = try XCTUnwrap(service.historyRecords.first?.samples)
-            XCTAssertEqual(samples.count, 2)
-            XCTAssertLessThan(samples[0].timestamp, samples[1].timestamp)
+            XCTAssertEqual(samples.count, 1)
+            XCTAssertEqual(samples[0].timestamp, service.historyRecords.first?.startedAt)
+            XCTAssertNotNil(service.historyRecords.first?.timingWarning)
         }
     }
 

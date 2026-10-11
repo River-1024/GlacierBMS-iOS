@@ -29,7 +29,7 @@
 | 控制器记录与导出 | `ControllerRecordSession.kt`、`ControllerRecordExporter.kt` | ControllerHistoryStore + 页面 | 部分/CI通过 | JSON/七列CSV，安卓18列/XLSX仍缺 |
 | 首页参数自定义/动态底部参数 | `HomeParameterEditor.kt`、`HomeParameterPresentation.kt` | 10卡片已接线；27槽位/39指标施工中 | 部分 | 不将旧10卡片与安卓全布局等价 |
 | 普通设置/阈值/采样周期 | `DashboardScreens.kt`、`DashboardSettings` | DrivingSettings/View 23项 + 日志 | 部分/接线施工中 | 21默认值及双连接开关已对照；必须核查消费端真实生效 |
-| 加速测试/RPM-GNSS-IMU 融合 | `AccelerationTestScreen.kt`、`acceleration/` | 无 | 缺失 | 先移植纯算法；不宣称专业精度；需真机传感器验收 |
+| 加速测试（最新范围 RPM 单渠道） | `AccelerationTestScreen.kt`、`acceleration/` | RPM Domain + AccelerationService/View/历史 | 本批代码接入/待CI | 系数默认0.0782；接收时序计时，不接GPS/IMU，不宣称硬件精度 |
 | 日志查看/复制/导出/清除 | `SoftwareLog*`、浏览器控制台 | `Sources/Services/Logging/`、Settings | 部分 | 对齐日志字段、筛选、导出和现场取证 |
 | 浮窗/画中画 | `FloatingWindowService.kt` | iOS 无对应通用浮窗 | 平台差异 | 不伪造等价；评估 Live Activity/CarPlay 替代 |
 | 浏览器调试控制台 | `browser/` | 无 | 缺失/非首版 | 明确不纳入首版或另立诊断功能 |
@@ -65,3 +65,18 @@
 - 8315235 / Run 38053408454：续航曲线/服务批次编译测试通过。
 - ced33b3 / Run 38054889610：行程逐点/曲线/窗口、控制器只读服务/页面/历史、导航批次编译测试通过。
 - 待提交首页完整槽位、驾驶设置消费接线、加速领域施工不在上述证据范围内。
+
+## 当前工作树接线更新（2026-10-11 10:24:39 +08:00）
+
+此节覆盖前文旧快照，不更改旧提交的验证事实。
+
+| 项目 | 当前源码状态 | 仍需验证/边界 |
+|---|---|---|
+| 首页 | 27槽位/39指标、动态接管/归还、横竖屏、故障两列；真实控制器18项与RSSI已接入 | 本批编译/布局与真机；不把缺失值补零 |
+| 普通驾驶设置 | 主题/字号/描述/阈值/功率图/探头、窗口/刷新/BMS周期、双启动连接策略已消费 | 保存偏好不代表已连接成功；只读查询不修改硬件参数 |
+| 续航 | 有效窗口平均速度及真实电流Ah积分km/Ah、JSON/CSV、确认重置 | 不学习；取消的学习/分析包不算缺口 |
+| 行程 | JSON/逐样本CSV长期导出、100样本/20窗口分页 | 地图逐点坐标和回放仍缺；后台/锁屏待真机 |
+| 控制器导出 | JSON/18列CSV/XLSX、完整可选telemetry、确认删除、时序警告 | 旧档案字段缺失保持不可用，XLSX为文本型；真实控制器待验收 |
+| 加速 | RPM唯一渠道，默认0.0782，状态机/真实流/记录/详情/导出/删除/失败重试 | 手机接收单调时钟非硬件时钟；断连/超时/后台/合批时序不可信则中止；待本批CI与车辆 |
+
+全部“本批代码接入”均非当前可安装包或真机验收证明。

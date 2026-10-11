@@ -5,6 +5,114 @@ import XCTest
 final class ControllerModelsTests: XCTestCase {
     private let timestamp = Date(timeIntervalSince1970: 1_792_000_000.125)
 
+    func testOldJSONWithoutTelemetryRemainsReadableAndDoesNotInventFields() throws {
+        let json = Data("""
+        {"timestamp":0,"voltage":72.3,"current":-12.5,"rpm":1250,"speed":31.25,"throttle":3.3,"brake":0.4}
+        """.utf8)
+        let old = try JSONDecoder().decode(ControllerSample.self, from: json)
+        XCTAssertNil(old.telemetry)
+        XCTAssertEqual(old.speed, 31.25) // Preserve old JSON, but never use this as exported car speed.
+        let row = ControllerRecordColumns.row(for: old, timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertEqual(row.count, 18)
+        XCTAssertEqual(Array(row.prefix(8)), ["72.3V", "-12.5A", "1250RPM", "--", "--", "--", "3.30V", "--"])
+        XCTAssertEqual(Array(row[8...15]), Array(repeating: "--", count: 8))
+        XCTAssertEqual(row[16], "0.40V")
+        XCTAssertEqual(row[17], "2001-01-01 00:00:00")
+    }
+
+    func testTelemetryCodableRoundTripIncludesAllFieldsAndOptionalBrake() throws {
+        for brake in [nil, 4.5] as [Double?] {
+            let telemetry = exportTelemetry(brake: brake)
+            let sample = ControllerSample(timestamp: timestamp, voltage: 0, current: 0, rpm: 0,
+                                          speed: 0, throttle: 0, brake: 0, telemetry: telemetry)
+            let data = try JSONEncoder().encode(sample)
+            XCTAssertEqual(try JSONDecoder().decode(ControllerSample.self, from: data), sample)
+            XCTAssertEqual(try JSONDecoder().decode(MotorControllerTelemetry.self,
+                                                    from: JSONEncoder().encode(telemetry)), telemetry)
+        }
+    }
+
+    func testTelemetryNullIsLegacyButMalformedTelemetryIsNotSilentlyDiscarded() throws {
+        let sample = self.sample(at: timestamp)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(sample)) as? [String: Any])
+        object["telemetry"] = NSNull()
+        XCTAssertNil(try JSONDecoder().decode(ControllerSample.self,
+            from: JSONSerialization.data(withJSONObject: object)).telemetry)
+        object["telemetry"] = ["rpm": 123]
+        XCTAssertThrowsError(try JSONDecoder().decode(ControllerSample.self,
+            from: JSONSerialization.data(withJSONObject: object)))
+    }
+
+    func testNonFiniteTelemetryUsesExistingJSONFloatStrategyAndExportsPlaceholders() throws {
+        let sample = ControllerSample(timestamp: timestamp, voltage: 72, current: 0, rpm: 0,
+            speed: .nan, throttle: 0, brake: 0, telemetry: exportTelemetry(voltage: .infinity, brake: .nan))
+        let encoder = JSONEncoder()
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
+        let decoded = try decoder.decode(ControllerSample.self, from: encoder.encode(sample))
+        let telemetry = try XCTUnwrap(decoded.telemetry)
+        XCTAssertEqual(telemetry.controllerVoltageV, .infinity)
+        XCTAssertTrue(try XCTUnwrap(telemetry.linearBrakeVoltageV).isNaN)
+        let row = ControllerRecordColumns.row(for: decoded)
+        XCTAssertEqual(row[0], "--V")
+        XCTAssertEqual(row[16], "--V")
+    }
+
+    func test18ColumnsMatchAndroidGoldenIncludingUnitsBitsAndHexGear() {
+        XCTAssertEqual(ControllerRecordColumns.headers, [
+            "电压", "母线电流", "转速", "电控温度", "电机温度", "相线峰值电流", "油门电压", "档位",
+            "控制器状态", "故障信息", "端口状态", "给定Iq", "反馈Iq", "给定Id", "弱磁", "控制器历史故障", "线性刹车电压", "时间"
+        ])
+        let sample = ControllerSample(timestamp: timestamp, voltage: 0, current: 0, rpm: 0,
+                                      speed: 999, throttle: 0, brake: 0, telemetry: exportTelemetry())
+        XCTAssertEqual(ControllerRecordColumns.row(for: sample, timeZone: TimeZone(secondsFromGMT: 0)!), [
+            "72.3V", "-12.5A", "-1250RPM", "25℃", "40℃", "45.6A", "3.30V", "a",
+            "P档,刹车,请自学习", "霍尔故障,电机温度传感器故障", "957", "-25.0A", "12.3A", "-10.0A", "8.5A",
+            "硬件过流,相过流", "4.50V", "2026-10-14 17:46:40"
+        ])
+    }
+
+    func test18ColumnCSVEscapesBitNamesAndOutputsNewestFirstWithoutChangingSession() {
+        let session = ControllerRecordSession()
+        for date in [timestamp, timestamp.addingTimeInterval(1)] {
+            XCTAssertTrue(session.append(ControllerSample(timestamp: date, voltage: 0, current: 0, rpm: 0,
+                speed: .nan, throttle: 0, brake: 0, telemetry: exportTelemetry(brake: nil))))
+        }
+        let csv = session.exportControllerCSV(timeZone: TimeZone(secondsFromGMT: 0)!)
+        let lines = csv.split(separator: "\n")
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertEqual(String(lines[0]), ControllerRecordSession.controllerCSVHeader)
+        XCTAssertTrue(lines[1].hasSuffix(",--V,2026-10-14 17:46:41"))
+        XCTAssertTrue(lines[2].hasSuffix(",--V,2026-10-14 17:46:40"))
+        XCTAssertTrue(csv.contains("\"P档,刹车,请自学习\",\"霍尔故障,电机温度传感器故障\""))
+        XCTAssertEqual(session.samples.map(\.timestamp), [timestamp, timestamp.addingTimeInterval(1)])
+        XCTAssertFalse(session.isFinished)
+    }
+
+    func testUnknownBitsAndNonFiniteTelemetryHaveNoInventedMeasurements() {
+        let telemetry = exportTelemetry(voltage: .infinity, brake: .nan, state: 0xC000, fault: 0x8000)
+        let sample = ControllerSample(timestamp: timestamp, voltage: 72, current: 0, rpm: 0,
+                                      speed: 100, throttle: 0, brake: 0, telemetry: telemetry)
+        let row = ControllerRecordColumns.row(for: sample)
+        XCTAssertEqual(row[0], "--V")
+        XCTAssertEqual(row[8], "")
+        XCTAssertEqual(row[9], "")
+        XCTAssertEqual(row[16], "--V")
+        XCTAssertFalse(row.contains("100"))
+    }
+
+    private func exportTelemetry(voltage: Double = 72.3, brake: Double? = 4.5,
+                                 state: Int = 0xA011, fault: Int = 0xC001) -> MotorControllerTelemetry {
+        MotorControllerTelemetry(controllerVoltageV: voltage, busCurrentA: -12.5, rpm: -1250,
+            controllerTemperatureC: 25, motorTemperatureC: 40, phasePeakCurrentA: 45.6, throttleVoltageV: 3.3,
+            runStateCode: 3, gear: 0x1A, controllerStateBits: state, faultBits: fault, portStatusBits: 957,
+            givenIqA: -25, feedbackIqA: 12.3, givenIdA: -10, fieldWeakeningA: 8.5,
+            historyFaultBits: 0x8006, linearBrakeVoltageV: brake)
+    }
+
     func testControllerSampleRoundTripsThroughCodable() throws {
         let sample = ControllerSample(
             timestamp: timestamp,

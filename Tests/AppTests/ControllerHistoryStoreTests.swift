@@ -30,7 +30,7 @@ final class ControllerHistoryStoreTests: XCTestCase {
         XCTAssertEqual(object["deviceName"] as? String, "控制器,\"中文\"/../")
     }
 
-    func testNonFiniteMissingValuesRoundTripAndCSVUsesEmptyCells() throws {
+    func testNonFiniteMissingValuesRoundTripAndCSVUses18Columns() throws {
         let store = ControllerHistoryStore(directory: directory)
         let sample = ControllerSample(timestamp: date, voltage: .nan, current: .infinity,
                                       rpm: -1250, speed: -.infinity, throttle: 3.3, brake: .nan)
@@ -43,8 +43,12 @@ final class ControllerHistoryStoreTests: XCTestCase {
         XCTAssertEqual(saved.speed, -.infinity)
         XCTAssertTrue(saved.brake.isNaN)
         let csv = try store.export(loaded, format: .csv, to: directory.appendingPathComponent("exports"))
-        XCTAssertEqual(try String(contentsOf: csv, encoding: .utf8), ControllerRecordSession.csvHeader + "\n" +
-                       "2023-11-14T22:13:20.125Z,,,-1250,,3.3,\n")
+        let session = ControllerRecordSession()
+        XCTAssertTrue(session.append(saved))
+        let csvText = try String(contentsOf: csv, encoding: .utf8)
+        XCTAssertEqual(csvText, session.exportControllerCSV())
+        XCTAssertTrue(csvText.contains("--V,--A,-1250RPM,--,--,--,3.30V,"))
+        XCTAssertFalse(csvText.contains("Infinity"))
         let json = try store.export(loaded, format: .json, to: directory.appendingPathComponent("exports"))
         XCTAssertTrue(try String(contentsOf: json, encoding: .utf8).contains("\"NaN\""))
     }
@@ -122,7 +126,9 @@ final class ControllerHistoryStoreTests: XCTestCase {
                         [sample(at: Date(timeIntervalSince1970: .nan))]] {
             let record = makeRecord(samples: samples)
             XCTAssertThrowsError(try store.save(record))
-            XCTAssertThrowsError(try store.export(record, format: .csv, to: directory))
+            for format in ControllerHistoryStore.ExportFormat.allCases {
+                XCTAssertThrowsError(try store.export(record, format: format, to: directory))
+            }
         }
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
     }
@@ -137,7 +143,91 @@ final class ControllerHistoryStoreTests: XCTestCase {
         let empty = makeRecord(samples: [])
         try store.save(empty)
         let csv = try store.export(empty, format: .csv, to: directory)
-        XCTAssertEqual(try String(contentsOf: csv, encoding: .utf8), ControllerRecordSession.csvHeader + "\n")
+        XCTAssertEqual(try String(contentsOf: csv, encoding: .utf8), ControllerRecordSession.controllerCSVHeader + "\n")
+    }
+
+    func testOptionalTimingWarningPersistsAndOldJSONRemainsCompatible() throws {
+        let store = ControllerHistoryStore(directory: directory)
+        let warning = "重复或倒退的接收时间：已拒绝该采样，未改写时间"
+        let record = ControllerHistoryRecord(deviceID: deviceID, deviceName: "controller", startedAt: date,
+            endedAt: date.addingTimeInterval(1), samples: [sample(at: date)], timingWarning: warning)
+        try store.save(record)
+        XCTAssertEqual(try store.load(id: record.id).timingWarning, warning)
+        let export = try store.export(record, format: .json, to: directory.appendingPathComponent("exports"))
+        let exported = try JSONDecoder().decode(ControllerHistoryRecord.self, from: Data(contentsOf: export))
+        XCTAssertEqual(exported.timingWarning, warning)
+        let source = directory.appendingPathComponent("\(record.id.uuidString).json")
+        var oldJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any])
+        oldJSON.removeValue(forKey: "timingWarning")
+        try JSONSerialization.data(withJSONObject: oldJSON).write(to: source)
+        let old = try store.load(id: record.id)
+        XCTAssertNil(old.timingWarning)
+        XCTAssertEqual(old.samples, record.samples)
+        XCTAssertNil(makeRecord().timingWarning)
+    }
+
+    func testFullTelemetryJSONAndBothTableExportsPreserveSnapshot() throws {
+        let store = ControllerHistoryStore(directory: directory)
+        let bytes = Data([0xA8, 2, 1, 0x24, 1, 0x1F]) + Data(repeating: 0, count: 31) + Data([0, 0])
+        guard case .valid(let telemetry) = MotorControllerProtocol.parseRealtimeResponse(bytes) else {
+            return XCTFail("Fixture must decode")
+        }
+        let sample = ControllerSample(timestamp: date, voltage: 99, current: 99, rpm: 99,
+            speed: .nan, throttle: 99, brake: 99, telemetry: telemetry)
+        let record = makeRecord(samples: [sample])
+        try store.save(record)
+        let loaded = try store.load(id: record.id)
+        XCTAssertEqual(loaded.samples.first?.telemetry, telemetry)
+        let session = ControllerRecordSession()
+        XCTAssertTrue(session.append(sample))
+        let csv = try store.export(loaded, format: .csv, to: directory.appendingPathComponent("exports"))
+        XCTAssertEqual(try String(contentsOf: csv, encoding: .utf8), session.exportControllerCSV())
+        let xlsx = try store.export(loaded, format: .xlsx, to: directory.appendingPathComponent("exports"))
+        XCTAssertEqual(try Data(contentsOf: xlsx), try session.exportControllerXLSX())
+        XCTAssertEqual(try store.load(id: record.id).samples.first?.telemetry, telemetry)
+    }
+
+    func testReportingFailuresKeepsCorruptFilesAndHealthyRecords() throws {
+        let store = ControllerHistoryStore(directory: directory)
+        let record = makeRecord()
+        try store.save(record)
+        let corruptID = UUID()
+        let corrupt = directory.appendingPathComponent("\(corruptID.uuidString).json")
+        let bytes = Data("{broken".utf8)
+        try bytes.write(to: corrupt)
+        let report = try store.loadAllReportingFailures()
+        XCTAssertEqual(report.records, [record])
+        XCTAssertEqual(report.unreadableRecordIDs, [corruptID])
+        XCTAssertEqual(try Data(contentsOf: corrupt), bytes)
+    }
+
+    func testSharingUnsavedRecordUsesIndependentSnapshotsAndNeverSavesOrDeletesHistory() throws {
+        let store = ControllerHistoryStore(directory: directory)
+        let record = makeRecord()
+        let exports = directory.appendingPathComponent("exports")
+        let first = try store.exportForSharing(record, format: .xlsx, to: exports)
+        let bytes = try Data(contentsOf: first)
+        let second = try store.exportForSharing(record, format: .xlsx, to: exports)
+        XCTAssertNotEqual(first.deletingLastPathComponent(), second.deletingLastPathComponent())
+        XCTAssertEqual(try Data(contentsOf: second), bytes)
+        XCTAssertEqual(try store.loadAll(), [])
+        try FileManager.default.removeItem(at: first.deletingLastPathComponent())
+        XCTAssertEqual(try Data(contentsOf: second), bytes)
+        try store.save(record)
+        try FileManager.default.removeItem(at: second.deletingLastPathComponent())
+        XCTAssertEqual(try store.load(id: record.id), record)
+    }
+
+    func testFailedSharingCleansOnlyItsOwnSnapshot() throws {
+        let store = ControllerHistoryStore(directory: directory)
+        let exports = directory.appendingPathComponent("exports")
+        let retained = try store.exportForSharing(makeRecord(), format: .json, to: exports)
+        let bytes = try Data(contentsOf: retained)
+        let before = try FileManager.default.contentsOfDirectory(atPath: exports.path).sorted()
+        let invalid = makeRecord(samples: [sample(at: date.addingTimeInterval(-1))])
+        XCTAssertThrowsError(try store.exportForSharing(invalid, format: .xlsx, to: exports))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exports.path).sorted(), before)
+        XCTAssertEqual(try Data(contentsOf: retained), bytes)
     }
 
     private func makeRecord(samples: [ControllerSample]? = nil) -> ControllerHistoryRecord {

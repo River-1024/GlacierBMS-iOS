@@ -1,100 +1,320 @@
 import ANTuRideDomain
 import SwiftUI
 
-/// 首页驾驶仪表盘。阶段 2 绑定 BMS 实时数据与 GPS 速度/行程控制；
-/// 综合续航属阶段 3，以占位呈现，不伪造数值。
+/// 首页驾驶仪表盘。连接与行程控制固定显示，其余实时卡片使用已保存布局。
+@MainActor
 struct DashboardView: View {
     var goToDeviceSelection: () -> Void = {}
 
     @EnvironmentObject private var bms: BmsBluetoothService
     @EnvironmentObject private var location: LocationService
     @EnvironmentObject private var tripSession: TripSessionService
+    @EnvironmentObject private var rangeService: RangeService
+    @EnvironmentObject private var controller: ControllerBluetoothService
+    @EnvironmentObject private var driving: DrivingSettingsStore
+    // 与设置编辑器共用同一偏好键；保存后即使 Tab 未重建也会刷新。
+    @AppStorage(HomeParameterPrefs.key) private var storedLayout = ""
+
+    private var homeConfig: HomeParameterConfig {
+        HomeParameterPrefs.decode(storedLayout) ?? .androidDefault
+    }
+
+    private var rangeDisplay: String {
+        guard rangeService.status == .valid,
+              let kilometers = rangeService.prediction?.predictedRangeKm,
+              kilometers.isFinite, kilometers >= 0 else { return "--" }
+        return String(format: "%.1f", kilometers)
+    }
 
     var body: some View {
         NavigationStack {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let snapshot = bms.latestSnapshot
-                let freshness = BmsFreshnessEvaluator().evaluate(snapshot: snapshot, now: context.date)
-                ScrollView {
-                    VStack(spacing: 16) {
-                        ConnectionStatusCard(
-                            state: bms.state,
-                            freshness: freshness,
-                            connectedName: bms.connectedDeviceName,
-                            goToDeviceSelection: goToDeviceSelection
-                        )
-                        SpeedCard(fix: location.lastFix)
-                        TripControlCard(
-                            state: tripSession.state,
-                            distanceMeters: tripSession.liveDistanceMeters,
-                            energyWh: tripSession.liveEnergyWh,
-                            lastError: tripSession.lastError,
-                            onStart: { tripSession.startTrip() },
-                            onStop: { tripSession.stopTrip() }
-                        )
-                        HStack(spacing: 12) {
-                            MetricCard(title: "综合续航", value: "--", unit: "km", caption: "阶段 3 接入")
-                            MetricCard(
-                                title: "SOC",
-                                value: displayValue(freshness) { BmsFormatters.percent($0.soc) },
-                                unit: "%",
-                                isStale: freshness.level == .stale
+            GeometryReader { geometry in
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let freshness = BmsFreshnessEvaluator().evaluate(snapshot: bms.latestSnapshot, now: context.date)
+                    // 窄屏保持单列；横屏/宽屏双列，顺序始终从左到右、从上到下。
+                    let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: geometry.size.width >= 600 ? 2 : 1)
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            ConnectionStatusCard(
+                                state: bms.state,
+                                freshness: freshness,
+                                connectedName: bms.connectedDeviceName,
+                                goToDeviceSelection: goToDeviceSelection
                             )
+                            TripControlCard(
+                                state: tripSession.state,
+                                distanceMeters: tripSession.liveDistanceMeters,
+                                energyWh: tripSession.liveEnergyWh,
+                                lastError: tripSession.lastError,
+                                onStart: { tripSession.startTrip() },
+                                onStop: { tripSession.stopTrip() }
+                            )
+                            if homeConfig.usesSlotLayout {
+                                slotDashboard(freshness: freshness, size: geometry.size)
+                            } else {
+                                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                                    ForEach(homeConfig.visibleCardIDs) { id in
+                                        parameterCard(id, freshness: freshness)
+                                            .accessibilityIdentifier("dashboard.card.\(id.rawValue)")
+                                    }
+                                }
+                            }
                         }
-                        HStack(spacing: 12) {
-                            MetricCard(
-                                title: "剩余电量",
-                                value: displayValue(freshness) { BmsFormatters.voltage($0.remainingAh) },
-                                unit: "Ah",
-                                isStale: freshness.level == .stale
-                            )
-                            MetricCard(
-                                title: "功率",
-                                value: displayValue(freshness) { snapshot in
-                                    snapshot.power.map(BmsFormatters.kilowatts) ?? "--"
-                                },
-                                unit: "kW",
-                                isStale: freshness.level == .stale
-                            )
-                        }
-                        HStack(spacing: 12) {
-                            MetricCard(
-                                title: "电流",
-                                value: displayValue(freshness) { BmsFormatters.current($0.current) },
-                                unit: "A",
-                                isStale: freshness.level == .stale
-                            )
-                            MetricCard(
-                                title: "总电压",
-                                value: displayValue(freshness) { BmsFormatters.voltage($0.totalVoltage) },
-                                unit: "V",
-                                isStale: freshness.level == .stale
-                            )
-                        }
-                        MetricCard(
-                            title: "总容量 / SOH",
-                            value: displayValue(freshness) { snapshot in
-                                snapshot.capacityAh > 0 ? BmsFormatters.voltage(snapshot.capacityAh) : "--"
-                            },
-                            unit: "Ah",
-                            caption: displayValue(freshness) { snapshot in
-                                snapshot.soh.map { "SOH \($0)%" } ?? "SOH --"
-                            },
-                            isStale: freshness.level == .stale
-                        )
-                        StatusChipsCard(snapshot: freshness.level == .noData ? nil : snapshot, isStale: freshness.level == .stale)
-                        CurrentChartCard(history: bms.snapshotHistory)
+                        .padding()
                     }
-                    .padding()
+                    .navigationTitle("安途")
                 }
-                .navigationTitle("安途")
             }
         }
     }
 
-    private func displayValue(_ freshness: BmsDataFreshness, transform: (BmsSnapshot) -> String) -> String {
-        guard let snapshot = bms.latestSnapshot, freshness.level != .noData else { return "--" }
-        return transform(snapshot)
+    /// 兼容已保存的旧版十卡片布局，不因切换到槽位布局而丢失用户偏好。
+    @ViewBuilder
+    private func parameterCard(_ id: HomeParameterCardID, freshness: BmsDataFreshness) -> some View {
+        switch id {
+        case .currentChart: powerGraphic
+        case .status:
+            StatusChipsCard(snapshot: freshness.level == .fresh ? bms.latestSnapshot : nil, isStale: freshness.level == .stale)
+        case .capacityAndHealth:
+            VStack { slotCard(.init(slotId: id.rawValue, metricId: "bms_capacity"), freshness: freshness)
+                slotCard(.init(slotId: "soh", metricId: "bms_soh"), freshness: freshness) }
+        default:
+            slotCard(.init(slotId: id.rawValue, metricId: legacyMetricID(id)), freshness: freshness, fontSize: 32)
+        }
+    }
+
+    private func legacyMetricID(_ id: HomeParameterCardID) -> String {
+        switch id {
+        case .speed: return "app_gps_speed"
+        case .range: return "app_range"
+        case .stateOfCharge: return "bms_soc"
+        case .remainingCapacity: return "bms_remaining"
+        case .power: return "bms_power"
+        case .current: return "bms_current"
+        case .voltage: return "bms_voltage"
+        case .capacityAndHealth: return "bms_capacity"
+        case .status: return "bms_status"
+        case .currentChart: return "bms_current"
+        }
+    }
+
+    @ViewBuilder
+    private var powerGraphic: some View {
+        if driving.settings.defaultPowerDisplayMode == .curve {
+            PowerChartCard(history: bms.snapshotHistory)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("实时功率").font(.headline)
+                if let snapshot = bms.latestSnapshot, bms.state == .ready,
+                   BmsFreshnessEvaluator().evaluate(snapshot: snapshot, now: Date()).level == .fresh,
+                   let power = snapshot.power, power.isFinite {
+                    let base = power >= 0 ? driving.settings.dischargeBaseW : driving.settings.chargeBaseW
+                    ProgressView(value: min(1, abs(power) / base))
+                        .tint(metricColor("bms_power", snapshot: snapshot))
+                    Text(String(format: "%.0f W / %.0f W", power, base)).monospacedDigit()
+                } else { Text("--").foregroundStyle(.secondary) }
+            }.padding().glassCard()
+        }
+    }
+
+    @ViewBuilder
+    private func slotDashboard(freshness: BmsDataFreshness, size: CGSize) -> some View {
+        let portrait = HomeParameterLayout.isPortrait(width: Double(size.width), height: Double(size.height))
+        if portrait {
+            topSlotCards(freshness: freshness, portrait: true)
+            powerGraphic
+                .frame(minHeight: 190)
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                topSlotCards(freshness: freshness, portrait: false)
+                    .frame(width: 290)
+                powerGraphic
+                    .frame(maxWidth: .infinity, minHeight: 280)
+            }
+        }
+        bottomSlots(in: .vehicle, freshness: freshness)
+        bottomSlots(in: .controller, freshness: freshness)
+    }
+
+    private func topSlotCards(freshness: BmsDataFreshness, portrait: Bool) -> some View {
+        VStack(spacing: portrait ? 8 : 6) {
+            ForEach(HomeParameterSlotDefinition.heroIDs, id: \.self) { slotId in
+                if let metricId = homeConfig.metricId(for: slotId) {
+                    slotCard(HomeParameterAssignment(slotId: slotId, metricId: metricId), freshness: freshness,
+                             fontSize: slotId == "top_speed" ? (portrait ? 84 : 60) : (portrait ? 32 : 26))
+                        .frame(minHeight: slotId == "top_speed" ? (portrait ? 148 : 96) : (portrait ? 82 : 60))
+                }
+            }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(HomeParameterSlotDefinition.gridIDs, id: \.self) { slotId in
+                    if let metricId = homeConfig.metricId(for: slotId) {
+                        slotCard(HomeParameterAssignment(slotId: slotId, metricId: metricId), freshness: freshness,
+                                 fontSize: portrait ? 28 : 22)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bottomSlots(in region: HomeParameterRegion, freshness: BmsDataFreshness) -> some View {
+        let rows = HomeParameterLayout.rows(homeConfig.assignments(in: region), in: region)
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(region.title).font(.headline)
+                ForEach(rows.indices, id: \.self) { index in
+                    let row = rows[index]
+                    GeometryReader { geometry in
+                        let column = max(0, (geometry.size.width - 16) / 3)
+                        HStack(spacing: 8) {
+                            ForEach(row) { assignment in
+                                let span = HomeParameterLayout.span(assignment, in: region)
+                                slotCard(assignment, freshness: freshness)
+                                    .frame(width: column * CGFloat(span) + CGFloat(span - 1) * 8)
+                            }
+                        }
+                    }.frame(height: 118)
+
+                }
+            }
+        }
+    }
+
+    private func slotCard(_ assignment: HomeParameterAssignment, freshness: BmsDataFreshness,
+                          fontSize: CGFloat = 14) -> some View {
+        let snapshot = bms.state == .ready && freshness.level == .fresh ? bms.latestSnapshot : nil
+        let readout = HomeParameterReadout.read(
+            metricId: assignment.metricId, snapshot: snapshot,
+            gpsSpeedKmh: location.lastFix.flatMap { fix in
+                let age = Date().timeIntervalSince(fix.timestamp)
+                return location.isUpdating && age >= 0 && age <= 10 && fix.isSpeedValid ? fix.speed * 3.6 : nil
+            },
+            rangeKm: rangeService.status == .valid ? rangeService.prediction?.predictedRangeKm : nil,
+            consumptionWhPerKm: rangeService.status == .valid ? rangeService.effectiveWhPerKm : nil,
+            controller: freshControllerTelemetry, settings: driving.settings,
+            averageSpeedKmh: rangeService.averageSpeedKmh, referenceKmPerAh: rangeService.referenceKmPerAh,
+            bmsRSSI: bms.rssiReceivedAt.flatMap { date in
+                let age = Date().timeIntervalSince(date)
+                return bms.state == .ready && age >= 0 && age <= 10 ? bms.rssi : nil
+            }
+        )
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(driving.settings.showTextDescriptions ? readout.title : readout.title.components(separatedBy: " · ").last ?? readout.title).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            Text(readout.value).font(.system(size: fontSize * driving.settings.valueScale, weight: .semibold, design: .rounded))
+                .foregroundStyle(metricColor(assignment.metricId, snapshot: snapshot))
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.3)
+            if !readout.unit.isEmpty { Text(readout.unit).font(.caption2).foregroundStyle(AppTheme.accent) }
+            if assignment.metricId == "app_gps_speed", let fix = location.lastFix, let speed = fix.speedKmhForDisplay,
+               location.isUpdating, Date().timeIntervalSince(fix.timestamp) >= 0,
+               Date().timeIntervalSince(fix.timestamp) <= 10 {
+                ProgressView(value: min(1, max(0, speed) / driving.settings.powerHeaderSpeedBaseKmh))
+                    .tint(metricColor(assignment.metricId, snapshot: snapshot))
+            }
+            if driving.settings.showTextDescriptions && assignment.metricId == "app_range" {
+                Text(rangeService.reasonText).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .glassCard(cornerRadius: 8)
+        .accessibilityIdentifier("dashboard.slot.\(assignment.slotId)")
+    }
+    private var freshControllerTelemetry: MotorControllerTelemetry? {
+        guard controller.state == .ready, let snapshot = controller.latestSnapshot else { return nil }
+        let age = Date().timeIntervalSince(snapshot.receivedAt)
+        return age >= 0 && age <= ControllerBluetoothService.responseTimeout ? snapshot.telemetry : nil
+    }
+
+    private func metricColor(_ id: String, snapshot: BmsSnapshot?) -> Color {
+        switch HomeMetricPresentation.tone(id, snapshot: snapshot, speedKmh: location.lastFix?.speedKmhForDisplay,
+                                          settings: driving.settings) {
+        case .neutral: return .primary
+        case .green: return AppTheme.success
+        case .yellow: return AppTheme.warning
+        case .red: return AppTheme.danger
+        }
+    }
+
+}
+
+/// 取数只按指标来源，不按槽位原位置；控制器值仅从独立实时链路读取。
+/// 纯取数函数可由 AppTests 验证，不触发蓝牙、定位或服务初始化。
+struct HomeParameterReadout: Equatable {
+    let title: String
+    let value: String
+    let unit: String
+
+    static func read(metricId: String, snapshot: BmsSnapshot? = nil,
+                     gpsSpeedKmh: Double? = nil, rangeKm: Double? = nil,
+                     consumptionWhPerKm: Double? = nil,
+                     controller: MotorControllerTelemetry? = nil, settings: DrivingSettings = .defaults,
+                     averageSpeedKmh: Double? = nil, referenceKmPerAh: Double? = nil,
+                     bmsRSSI: Int? = nil) -> Self {
+        let definition = HomeParameterMetricDefinition.definition(for: metricId)
+        var value = "--"
+        var unit = definition?.unit ?? ""
+        func number(_ value: Double?, _ decimals: Int = 1) -> String {
+            guard let value, value.isFinite else { return "--" }
+            return String(format: "%.*f", decimals, value)
+        }
+        switch metricId {
+        case "app_gps_speed": value = number(gpsSpeedKmh.map { max(0, $0) })
+        case "app_range": value = number(rangeKm.flatMap { $0 >= 0 ? $0 : nil })
+        case "app_consumption": value = number(consumptionWhPerKm.flatMap { $0 > 0 ? $0 : nil }, 0)
+        case "app_average_speed": value = number(averageSpeedKmh)
+        case "app_reference_consumption": value = number(referenceKmPerAh)
+        case "bms_rssi": value = bmsRSSI.map(String.init) ?? "--"
+        case "bms_remaining": value = number(snapshot?.remainingAh)
+        case "bms_soc": value = number(snapshot?.soc, 0)
+        case "bms_power":
+            if let power = snapshot?.power, power.isFinite {
+                unit = abs(power) >= 1_000 ? "kW" : "W"
+                value = number(unit == "kW" ? power / 1_000 : power, unit == "kW" ? 2 : 0)
+            }
+        case "bms_current": value = number(snapshot?.current)
+        case "bms_voltage": value = number(snapshot?.totalVoltage)
+        case "bms_diff": value = snapshot?.voltageDiffMillivolts.map { String($0) } ?? "--"
+        case "bms_temperature": value = HomeMetricPresentation.temperature(snapshot, settings: settings).map { String($0) } ?? "--"
+        case "bms_mos_temperature": value = snapshot.map { String($0.mosTemperature) } ?? "--"
+        case "bms_cell_count": value = snapshot.map { String($0.cellVoltagesMillivolts.count) } ?? "--"
+        case "bms_status": value = snapshot?.statusText ?? "--"
+        case "bms_mos_status":
+            if let snapshot {
+                if snapshot.chargeMOSOn == nil && snapshot.dischargeMOSOn == nil { value = "未知" }
+                else {
+                    value = "充电\(snapshot.chargeMOSOn == true ? "开" : "关") · 放电\(snapshot.dischargeMOSOn == true ? "开" : "关")"
+                }
+            }
+        case "bms_soh": value = snapshot?.soh.map { String($0) } ?? "--"
+        case "bms_runtime":
+            if let seconds = snapshot?.runtimeSeconds {
+                let days = seconds / 86_400
+                let hours = seconds % 86_400 / 3_600
+                value = days > 0 ? "\(days)天 \(hours)小时" : "\(hours)小时"
+            }
+        case "bms_capacity": value = number(snapshot?.capacityAh, 2)
+        case "bms_balancer_temperature": value = snapshot.map { String($0.balancerTemperature) } ?? "--"
+        case "controller_voltage": value = number(controller?.controllerVoltageV)
+        case "controller_bus_current": value = number(controller?.busCurrentA)
+        case "controller_rpm": value = controller.map { String($0.rpm) } ?? "--"
+        case "controller_temperature": value = controller.map { String($0.controllerTemperatureC) } ?? "--"
+        case "controller_motor_temperature": value = controller.map { String($0.motorTemperatureC) } ?? "--"
+        case "controller_phase_current": value = number(controller?.phasePeakCurrentA)
+        case "controller_run_state": value = controller?.runStateText ?? "--"
+        case "controller_fault": value = controller?.faultSummary ?? "--"
+        case "controller_throttle_voltage": value = number(controller?.throttleVoltageV)
+        case "controller_gear": value = controller.map { String($0.gear) } ?? "--"
+        case "controller_state_bits": value = controller.map { String($0.controllerStateBits) } ?? "--"
+        case "controller_port_bits": value = controller.map { String($0.portStatusBits) } ?? "--"
+        case "controller_given_iq": value = number(controller?.givenIqA)
+        case "controller_feedback_iq": value = number(controller?.feedbackIqA)
+        case "controller_given_id": value = number(controller?.givenIdA)
+        case "controller_field_weakening": value = number(controller?.fieldWeakeningA)
+        case "controller_history_fault_bits": value = controller.map { String($0.historyFaultBits) } ?? "--"
+        case "controller_linear_brake_voltage": value = number(controller?.linearBrakeVoltageV)
+        default: break
+        }
+        return Self(title: definition?.title ?? metricId, value: value, unit: value == "--" ? "" : unit)
     }
 }
 
@@ -398,5 +618,45 @@ private struct CurrentChart: View {
             context.draw(context.resolve(maxLabel), at: CGPoint(x: size.width - 24, y: inset + 6))
         }
         .frame(height: 140)
+    }
+}
+
+
+/// Historical measured power, never an amperage curve relabeled as watts.
+private struct PowerChartCard: View {
+    let history: [BmsSnapshot]
+    var body: some View {
+        let values = history.compactMap { snapshot -> Double? in
+            guard let value = snapshot.power, value.isFinite else { return nil }
+            return value
+        }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("历史功率曲线 · W").font(.headline)
+            if values.count >= 2, let first = history.first, let last = history.last,
+               last.receivedAt > first.receivedAt {
+                Canvas { context, size in
+                    let minimum = min(values.min() ?? 0, 0)
+                    let maximum = max(values.max() ?? 0, 1)
+                    let span = max(1, maximum - minimum)
+                    let duration = last.receivedAt.timeIntervalSince(first.receivedAt)
+                    var path = Path()
+                    var previous: Date?
+                    for sample in history {
+                        guard let power = sample.power, power.isFinite else { previous = nil; continue }
+                        let point = CGPoint(x: size.width * sample.receivedAt.timeIntervalSince(first.receivedAt) / duration,
+                                            y: size.height * (1 - (power - minimum) / span))
+                        if let previous, sample.receivedAt > previous,
+                           sample.receivedAt.timeIntervalSince(previous) <= 5 { path.addLine(to: point) }
+                        else { path.move(to: point) }
+                        previous = sample.receivedAt
+                    }
+                    context.stroke(path, with: .color(AppTheme.accent), lineWidth: 2)
+                }.frame(height: 140)
+                Text(String(format: "%.0f – %.0f W", values.min() ?? 0, values.max() ?? 0))
+                    .font(.caption).monospacedDigit()
+                Text("按接收时间绘制历史值；缺失功率和超过 5 秒的间隙不连线。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else { Text("等待有效功率样本…").foregroundStyle(.secondary).frame(minHeight: 140) }
+        }.frame(maxWidth: .infinity, alignment: .leading).padding().glassCard()
     }
 }

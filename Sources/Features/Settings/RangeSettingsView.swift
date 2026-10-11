@@ -1,15 +1,54 @@
+import ANTuRideDomain
 import SwiftUI
 
 @MainActor
 struct RangeSettingsView: View {
     @EnvironmentObject private var range: RangeService
+    @EnvironmentObject private var driving: DrivingSettingsStore
     @State private var capacityText = ""
+    @State private var windowMinutes = DrivingSettings.defaults.rangeWindowMinutes
+    @State private var refreshSeconds = DrivingSettings.defaults.rangeRefreshSeconds
     @State private var validationError: String?
+    @State private var settingsNotice: String?
+    @State private var settingsError: String?
+    @State private var confirmingClear = false
     @State private var confirmingReset = false
+    @State private var confirmationDeviceID: UUID?
     @FocusState private var editingCapacity: Bool
 
     var body: some View {
         Form {
+            Section {
+                LabeledContent("已应用窗口", value: "\(Int(range.windowAge / 60)) 分钟")
+                LabeledContent("已应用预测刷新", value: range.predictionRefreshInterval > 0
+                    ? "每 \(Int(range.predictionRefreshInterval)) 秒" : "每次有效样本")
+                Picker("窗口时长", selection: $windowMinutes) {
+                    ForEach(DrivingSettings.rangeWindowMinutesBounds, id: \.self) { minutes in
+                        Text("\(minutes) 分钟").tag(minutes)
+                    }
+                }
+                Picker("预测刷新", selection: $refreshSeconds) {
+                    ForEach(DrivingSettings.rangeRefreshSecondsBounds, id: \.self) { seconds in
+                        Text("每 \(seconds) 秒").tag(seconds)
+                    }
+                }
+                Button("保存窗口与刷新") { saveRangeSettings() }
+                    .accessibilityIdentifier("range.save.settings")
+                if let settingsNotice {
+                    Text(settingsNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let settingsError {
+                    Text(settingsError).font(.caption).foregroundStyle(.red)
+                        .accessibilityIdentifier("range.settings.error")
+                }
+            } header: {
+                Text("窗口与刷新")
+            } footer: {
+                Text("窗口表示最近保留的有效行驶区间，不是保证连续采样的时长；刷新只节流有效预测重算，过期、充电和保护状态仍会立即撤下续航。")
+            }
+
             Section {
                 HStack {
                     Text("额定容量")
@@ -22,6 +61,7 @@ struct RangeSettingsView: View {
                 }
                 Button("保存本设备容量") { saveCapacity() }
                     .disabled(range.deviceID == nil)
+                    .accessibilityIdentifier("range.save.capacity")
                 if let error = validationError {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
@@ -30,27 +70,75 @@ struct RangeSettingsView: View {
             } footer: {
                 Text("请填写电池真实额定容量；不会预填假定的 100 Ah。容量按稳定外设 UUID 保存，仅修改本设备。")
             }
+
+            Section {
+                Button("生成 JSON") { exportJSON() }
+                    .accessibilityIdentifier("range.settings.export.json")
+                Button("生成 CSV") { exportCSV() }
+                    .accessibilityIdentifier("range.settings.export.csv")
+                if let url = range.lastExportURL {
+                    ShareLink(item: url) { Label("分享导出文件", systemImage: "square.and.arrow.up") }
+                    Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if let error = range.lastError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                        .accessibilityIdentifier("range.settings.export.error")
+                }
+            } header: {
+                Text("本地导出")
+            } footer: {
+                Text("JSON/CSV 导出当前状态、窗口指标和已应用配置；JSON 另含有效区间。不包含原始坐标、不上传，无有效数据时明确导出空状态。")
+            }
+
             Section {
                 Text(range.deviceID?.uuidString ?? "未绑定设备：等待主线程接入稳定外设 UUID。")
-                    .font(.caption).textSelection(.enabled)
-                Button("重置本设备续航设置与窗口", role: .destructive) {
+                    .font(.caption)
+                    .textSelection(.enabled)
+                Button("清除当前有效窗口", role: .destructive) {
+                    confirmationDeviceID = range.deviceID
+                    confirmingClear = true
+                }
+                .disabled(range.deviceID == nil)
+                .accessibilityIdentifier("range.clear.window")
+                Button("重置本设备容量与窗口", role: .destructive) {
+                    confirmationDeviceID = range.deviceID
                     confirmingReset = true
                 }
                 .disabled(range.deviceID == nil)
+                .accessibilityIdentifier("range.reset.device")
             } footer: {
-                Text("重置后须重新设置容量并积累行驶窗口；不会删除其他设备设置、行程记录或已导出文件。")
+                Text("清除窗口会保留本设备容量；重置会同时删除本设备容量设置。两者都不删除其他设备设置、行程记录或已导出文件。")
             }
         }
         .navigationTitle("续航设置")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { reloadCapacity() }
+        .onAppear {
+            reloadCapacity()
+            reloadRangeSettings()
+        }
         .onChange(of: range.deviceID) { _ in
+            confirmingClear = false
             confirmingReset = false
+            confirmationDeviceID = nil
             editingCapacity = false
             reloadCapacity()
         }
+        .onChange(of: driving.settings) { _ in
+            reloadRangeSettings()
+        }
+        .confirmationDialog("清除当前设备续航窗口？", isPresented: $confirmingClear, titleVisibility: .visible) {
+            Button("清除窗口", role: .destructive) {
+                guard let id = confirmationDeviceID, id == range.deviceID else { return }
+                range.clearWindow()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只清除当前有效行驶区间，额定容量和窗口/刷新设置保留。")
+        }
         .confirmationDialog("重置当前设备续航？", isPresented: $confirmingReset, titleVisibility: .visible) {
             Button("重置", role: .destructive) {
+                guard let id = confirmationDeviceID, id == range.deviceID else { return }
                 editingCapacity = false
                 range.reset()
                 reloadCapacity()
@@ -71,6 +159,39 @@ struct RangeSettingsView: View {
         capacityText = range.nominalCapacityAh > 0 ? range.nominalCapacityAh.formatted(.number) : ""
         validationError = nil
     }
+
+    private func reloadRangeSettings() {
+        let safe = driving.settings.normalized()
+        windowMinutes = safe.rangeWindowMinutes
+        refreshSeconds = safe.rangeRefreshSeconds
+    }
+
+    private func saveRangeSettings() {
+        var candidate = driving.settings
+        candidate.rangeWindowMinutes = windowMinutes
+        candidate.rangeRefreshSeconds = refreshSeconds
+        settingsNotice = nil
+        settingsError = nil
+        do {
+            try driving.save(candidate)
+            // RootView 也会消费同一个 Published 快照；这里立即应用，避免页面返回前显示旧配置。
+            range.applyDrivingSettings(candidate)
+            settingsNotice = "已保存到本机并应用到续航服务。"
+        } catch {
+            settingsError = "保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func exportJSON() {
+        do { _ = try range.exportJSON() }
+        catch { /* 服务发布导出错误，页面保留可见错误。 */ }
+    }
+
+    private func exportCSV() {
+        do { _ = try range.exportCSV() }
+        catch { /* 服务发布导出错误，页面保留可见错误。 */ }
+    }
+
     private func saveCapacity() {
         // 与本地化显示格式一致（例如小数逗号地区），也接受普通点号输入。
         let text = capacityText.trimmingCharacters(in: .whitespacesAndNewlines)

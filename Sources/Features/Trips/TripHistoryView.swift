@@ -139,13 +139,26 @@ struct TripDetailView: View {
                 Text("暂停与缺口不补算里程或能耗。净能耗可为负（充电）；未采样显示 --。旧档案可能没有逐点数据；当前不提供地图回放。")
             }
             // legacy 档案保持原分段列表布局，不显示空图或空窗口区域。
-            if !trip.samples.isEmpty {
+            if hasSamples {
                 TripChartsSection(trip: trip)
             }
             Section("本地文件") {
                 Text(trip.id.uuidString).font(.caption.monospaced()).textSelection(.enabled)
-                Button("导出行程 JSON", action: export)
+                Button("导出行程 JSON") { export(.json) }
                     .accessibilityIdentifier("trip-export")
+                Button("导出逐样本 CSV") { export(.csv) }
+                    .disabled(!hasSamples)
+                    .accessibilityIdentifier("trip-export-csv")
+                if !hasSamples {
+                    Text("此档案没有逐样本数据；可导出 JSON，不补造 CSV 样本或地图轨迹。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Text("导出文件长期保存在本机 Documents/Exports，关闭分享或删除行程不会删除导出副本。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if let exportURL {
+                    Text(exportURL.path).font(.caption).textSelection(.enabled)
+                    Button("分享上次导出") { showingExport = true }
+                }
                 if let exportError { Text(exportError).foregroundStyle(AppTheme.danger) }
             }
         }
@@ -161,14 +174,14 @@ struct TripDetailView: View {
             .multilineTextAlignment(.trailing)
     }
 
-    private func export() {
+    private var hasSamples: Bool {
+        trip.segments.contains { !($0.samples?.isEmpty ?? true) }
+    }
+
+    private func export(_ format: TripStore.ExportFormat) {
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            // 与持久化相同的日期编码，便于 JSONDecoder 直接核验往返。
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("trip-\(trip.id.uuidString).json")
-            try encoder.encode(trip).write(to: url, options: .atomic)
-            exportURL = url
+            // 直接从详情快照导出：待保存/保存失败行程仍可取回数据。
+            exportURL = try TripStore().export(trip, format: format)
             exportError = nil
             showingExport = true
         } catch {
@@ -200,6 +213,9 @@ private struct TripChartsSection: View {
     let trip: Trip
     @State private var metric: TripMetric = .speed
     @State private var windowMinutes = 3
+    @State private var segmentPage = 0
+    @State private var samplePage = 0
+    @State private var windowPage = 0
 
     private struct ChartPoint: Identifiable {
         let id: Int
@@ -208,9 +224,18 @@ private struct TripChartsSection: View {
         let series: Int
     }
 
-    private var chartPoints: [ChartPoint] {
+    private func chartPoints(segment: TripSegment, range: Range<Int>) -> [ChartPoint] {
+        // 复用领域层断线规则，但只输入当前区间当前页，最多渲染 100 点。
+        let pageSegment = TripSegment(
+            kind: segment.kind, startedAt: segment.startedAt, endedAt: segment.endedAt,
+            distanceMeters: segment.distanceMeters, energyWh: segment.energyWh,
+            locationCount: segment.locationCount, energySampleCount: segment.energySampleCount,
+            invalidLocationCount: segment.invalidLocationCount,
+            samples: Array((segment.samples ?? [])[range])
+        )
+        let pageTrip = Trip(startedAt: trip.startedAt, segments: [pageSegment])
         var points: [ChartPoint] = []
-        for (series, samples) in trip.chartSegments(for: metric).enumerated() {
+        for (series, samples) in pageTrip.chartSegments(for: metric).enumerated() {
             for sample in samples {
                 if let value = metric.value(in: sample) {
                     points.append(ChartPoint(id: points.count, timestamp: sample.timestamp, value: value, series: series))
@@ -221,36 +246,60 @@ private struct TripChartsSection: View {
     }
 
     var body: some View {
-        Section {
-            Picker("曲线指标", selection: $metric) {
-                ForEach(TripMetric.allCases, id: \.self) { metric in
-                    Text(metric.label).tag(metric)
+        let segmentRange = TripStore.pageRange(count: trip.segments.count, page: segmentPage, pageSize: 1)
+        if let segmentIndex = segmentRange.first {
+            let segment = trip.segments[segmentIndex]
+            let samples = segment.samples ?? []
+            let range = TripStore.pageRange(count: samples.count, page: samplePage)
+            Section {
+                TripPageControls(title: "区间", count: trip.segments.count, pageSize: 1, page: $segmentPage)
+                Text("第 \(segmentIndex + 1) 段 · \(TripFormatters.kind(segment.kind))")
+                TripPageControls(title: "样本", count: samples.count, pageSize: 100, page: $samplePage)
+            } header: {
+                Text("分段样本浏览")
+            } footer: {
+                Text("每页最多 100 个原始样本，曲线只显示本页，不跨页或跨区间连线。")
+            }
+            Section {
+                Picker("曲线指标", selection: $metric) {
+                    ForEach(TripMetric.allCases, id: \.self) { metric in
+                        Text(metric.label).tag(metric)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("trip-chart-metric")
+                let points = chartPoints(segment: segment, range: range)
+                if points.isEmpty {
+                    Text("没有有效的\(metric.label)采样").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Chart(points) { point in
+                        LineMark(x: .value("时间", point.timestamp), y: .value(metric.label, point.value),
+                                 series: .value("连续区间", point.series))
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(AppTheme.accent)
+                        PointMark(x: .value("时间", point.timestamp), y: .value(metric.label, point.value))
+                            .foregroundStyle(AppTheme.accent)
+                            .symbolSize(12)
+                    }
+                    .chartYAxisLabel(metric.unit)
+                    .chartLegend(.hidden)
+                    .frame(height: 200)
+                    .accessibilityIdentifier("trip-detail-chart")
+                }
+            } header: {
+                Text("逐点曲线 · \(metric.unit)")
+            } footer: {
+                Text("仅展示本次输入的有效值；无效、暂停、相位切换及超时配对均断线，不沿用旧值。")
+            }
+            Section("逐样本 · 当前页") {
+                if samples.isEmpty {
+                    Text(segment.samples == nil ? "旧档案没有逐样本数据" : "本区间没有样本")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(range, id: \.self) { index in
+                    TripSampleRow(index: index + 1, sample: samples[index])
                 }
             }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("trip-chart-metric")
-            let points = chartPoints
-            if points.isEmpty {
-                Text("没有有效的\(metric.label)采样").font(.footnote).foregroundStyle(.secondary)
-            } else {
-                Chart(points) { point in
-                    LineMark(x: .value("时间", point.timestamp), y: .value(metric.label, point.value),
-                             series: .value("连续区间", point.series))
-                        .interpolationMethod(.linear)
-                        .foregroundStyle(AppTheme.accent)
-                    PointMark(x: .value("时间", point.timestamp), y: .value(metric.label, point.value))
-                        .foregroundStyle(AppTheme.accent)
-                        .symbolSize(12)
-                }
-                .chartYAxisLabel(metric.unit)
-                .chartLegend(.hidden)
-                .frame(height: 200)
-                .accessibilityIdentifier("trip-detail-chart")
-            }
-        } header: {
-            Text("逐点曲线 · \(metric.unit)")
-        } footer: {
-            Text("仅展示本次输入的有效值；无效、暂停、相位切换及超时配对均断线，不沿用旧值。")
         }
         Section {
             Picker("时间窗口", selection: $windowMinutes) {
@@ -260,15 +309,71 @@ private struct TripChartsSection: View {
             }.pickerStyle(.segmented)
             let summaries = trip.windowSummaries(minutes: windowMinutes)
             DisclosureGroup("查看 \(summaries.count) 个窗口") {
-                ForEach(Array(summaries.enumerated()), id: \.offset) { _, summary in
-                    TripWindowRow(summary: summary)
+                TripPageControls(title: "窗口", count: summaries.count, pageSize: 20, page: $windowPage)
+                ForEach(TripStore.pageRange(count: summaries.count, page: windowPage, pageSize: 20), id: \.self) { index in
+                    TripWindowRow(summary: summaries[index])
                 }
             }
         } header: {
             Text("窗口摘要")
         } footer: {
-            Text("按记录跨度划分，暂停/缺口仍占分母；末窗按实际时长。跨窗口仅按已积分区间比例分摊。GPS/BMS 单独覆盖，Wh/km 只取共同覆盖部分；-- 表示没有证据，不是零。")
+            Text("按记录跨度划分，暂停/缺口仍占分母；末窗按实际时长。跨窗口仅按已积分区间比例分摊。GPS/BMS 单独覆盖，Wh/km 只取共同覆盖部分；-- 表示没有证据，不是零。每页最多 20 个窗口。")
         }
+        .onChange(of: windowMinutes) { _ in windowPage = 0 }
+        .onChange(of: segmentPage) { _ in samplePage = 0 }
+    }
+}
+
+/// 有界切页而非持续追加；最后一页/空档案/页码变化都通过同一范围规则处理。
+private struct TripPageControls: View {
+    let title: String
+    let count: Int
+    let pageSize: Int
+    @Binding var page: Int
+
+    var body: some View {
+        let range = TripStore.pageRange(count: count, page: page, pageSize: pageSize)
+        let current = range.lowerBound / pageSize
+        let pages = count == 0 ? 0 : (count - 1) / pageSize + 1
+        VStack(alignment: .leading, spacing: 8) {
+            Text(count == 0 ? "\(title)：0 条" : "\(title)：\(range.lowerBound + 1)–\(range.upperBound) / \(count) · 第 \(current + 1)/\(pages) 页")
+                .font(.caption).monospacedDigit()
+            HStack {
+                Button("上一页") { page = current - 1 }
+                    .disabled(range.isEmpty || current == 0)
+                Spacer()
+                Button("下一页") { page = current + 1 }
+                    .disabled(range.isEmpty || range.upperBound == count)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+}
+
+private struct TripSampleRow: View {
+    let index: Int
+    let sample: TripSample
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("#\(index) · \(sample.timestamp, format: .dateTime.hour().minute().second())")
+                .font(.subheadline)
+            Text("GPS \(validity(sample.gpsValid)) · BMS \(validity(sample.bmsValid))")
+                .foregroundStyle(.secondary)
+            Text("速度 \(number(sample.speedMetersPerSecond, unit: "m/s")) · 电压 \(number(sample.voltageVolts, unit: "V"))")
+            Text("电流 \(number(sample.currentAmps, unit: "A")) · 功率 \(number(sample.powerWatts, unit: "W"))")
+            Text("里程 \(number(sample.distanceMeters, unit: "m")) / \(number(sample.locationIntervalSeconds, unit: "s")) · 能耗 \(number(sample.energyWh, unit: "Wh")) / \(number(sample.energyIntervalSeconds, unit: "s"))")
+            Text("纬度 \(number(sample.latitude, unit: "")) · 经度 \(number(sample.longitude, unit: ""))")
+        }.font(.caption).monospacedDigit().padding(.vertical, 4)
+    }
+
+    private func validity(_ value: Bool?) -> String {
+        value.map { $0 ? "有效" : "无效" } ?? "未采集"
+    }
+
+    private func number(_ value: Double?, unit: String) -> String {
+        guard let value, value.isFinite else { return "--" }
+        return value.formatted(.number.precision(.fractionLength(3))) + (unit.isEmpty ? "" : " " + unit)
     }
 }
 

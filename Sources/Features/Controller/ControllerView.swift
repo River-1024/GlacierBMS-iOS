@@ -5,6 +5,11 @@ import SwiftUI
 /// 轮询由 App/Root 的全局 scenePhase 管理；本页不关闭首页/加速共享会话。
 struct ControllerView: View {
     @EnvironmentObject private var controller: ControllerBluetoothService
+    @State private var deletionIDs: [UUID] = []
+    @State private var confirmingDeletion = false
+    @State private var unreadableCount = 0
+    @State private var historyReadError: String?
+    @State private var deletionError: String?
 
     var body: some View {
         List {
@@ -57,12 +62,18 @@ struct ControllerView: View {
                 }
                 .disabled(!controller.isRecording && (controller.latestTelemetry == nil || controller.pendingRecord != nil))
                 .accessibilityIdentifier("controller-record-toggle")
-                if controller.pendingRecord != nil {
+                if let pending = controller.pendingRecord {
                     Button("重试保存内存中的记录") { controller.savePendingRecord() }
+                    ControllerRecordExportButtons(record: pending, store: controller.historyStore)
+                    Text("尚未保存：可先导出内存快照。分享不会清除待保存记录。")
+                        .font(.footnote).foregroundStyle(AppTheme.warning)
+                }
+                if let warning = controller.recordingTimingWarning {
+                    Text(warning).font(.footnote).foregroundStyle(AppTheme.warning)
                 }
                 if let error = controller.historyError { Text(error).foregroundStyle(AppTheme.danger) }
             } header: { Text("历史记录") } footer: {
-                Text("只采集开始之后的新有效整帧，最多 30 分钟。断连或 App 退出前台时停止并保存；保存失败保留内存快照，退出进程仍可能丢失。")
+                Text("只采集开始之后的新有效整帧，最多 30 分钟。重复或倒退的接收时间不改写，采样会被拒绝。断连或 App 退出前台时停止并保存；保存失败保留内存快照，退出进程仍可能丢失。")
             }
             Section {
                 if controller.historyRecords.isEmpty { Text("暂无本地记录").foregroundStyle(.secondary) }
@@ -79,17 +90,57 @@ struct ControllerView: View {
                     }
                 }
                 .onDelete { offsets in
-                    let ids = offsets.map { controller.historyRecords[$0].id }
-                    for id in ids { controller.deleteRecord(id: id) }
+                    deletionIDs = offsets.compactMap { index in
+                        controller.historyRecords.indices.contains(index) ? controller.historyRecords[index].id : nil
+                    }
+                    confirmingDeletion = !deletionIDs.isEmpty
                 }
-                Button("重新读取历史") { controller.refreshHistory() }
-            } header: { Text("本地文件 · 左滑删除") } footer: {
-                Text("JSON 持久化，支持 JSON/CSV 分享。历史仅存时间、电压、电流、转速、车速占位、转把和刹车电压七列，不等同安卓十八列导出。缺失值：CSV 空单元格、JSON NaN 字符串。未实现 XLSX 或 Android 历史导入。")
+                if unreadableCount > 0 {
+                    Text("有 \(unreadableCount) 条历史记录读取失败；原文件已保留，其余记录仍可导出。")
+                        .foregroundStyle(AppTheme.warning)
+                }
+                if let historyReadError { Text(historyReadError).foregroundStyle(AppTheme.danger) }
+                if let deletionError { Text(deletionError).foregroundStyle(AppTheme.danger) }
+                Button("重新读取历史") { refreshHistory() }
+            } header: { Text("本地文件 · 左滑后确认删除") } footer: {
+                Text("JSON 保存完整遥测并兼容旧记录；CSV/XLSX 对齐安卓 18 列，最新采样在前。旧记录保留已知值，缺失遥测显示 --，不补造温度、状态或车速。导出时间为 iPhone 接收时间的秒级文本；XLSX 不代表控制器硬件时钟精度。未实现 Android 历史导入。")
             }
         }
         .navigationTitle("控制器功能")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { controller.refreshHistory() }
+        .onAppear { refreshHistory() }
+        .onChange(of: controller.historyRecords) { _ in inspectHistoryFailures() }
+        .alert("删除控制器记录？", isPresented: $confirmingDeletion) {
+            Button("取消", role: .cancel) { deletionIDs = [] }
+            Button("删除", role: .destructive) { deleteConfirmedRecords() }
+        } message: {
+            Text("将删除 \(deletionIDs.count) 条本地记录，无法撤销；已导出的分享文件不受影响。")
+        }
+    }
+
+    private func refreshHistory() {
+        controller.refreshHistory()
+        inspectHistoryFailures()
+    }
+
+    private func inspectHistoryFailures() {
+        do {
+            unreadableCount = try controller.historyStore.loadAllReportingFailures().unreadableRecordIDs.count
+            historyReadError = nil
+        } catch {
+            historyReadError = "历史读取失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func deleteConfirmedRecords() {
+        var failures: [String] = []
+        for id in deletionIDs {
+            controller.deleteRecord(id: id)
+            if let error = controller.historyError { failures.append(error) }
+        }
+        deletionIDs = []
+        deletionError = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        inspectHistoryFailures()
     }
 
     @ViewBuilder private var telemetryRows: some View {
@@ -122,8 +173,6 @@ private struct ControllerHistoryDetailView: View {
     let store: ControllerHistoryStore
     @State private var record: ControllerHistoryRecord?
     @State private var errorText: String?
-    @State private var exportURL: URL?
-    @State private var showingExport = false
 
     var body: some View {
         List {
@@ -134,8 +183,12 @@ private struct ControllerHistoryDetailView: View {
                     Text(record.startedAt, format: .dateTime.year().month().day().hour().minute().second())
                     Text(record.endedAt, format: .dateTime.year().month().day().hour().minute().second())
                     valueRow("采样行数", "\(record.samples.count)")
-                    Button("导出 JSON") { export(record, format: .json) }
-                    Button("导出 CSV") { export(record, format: .csv) }
+                    if let warning = record.timingWarning {
+                        Text(warning).font(.footnote).foregroundStyle(AppTheme.warning)
+                    }
+                    Text("时间取自 iPhone 接收时刻；CSV/XLSX 仅显示到秒，不代表控制器硬件时钟精度。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    ControllerRecordExportButtons(record: record, store: store)
                 }
                 Section("采样 · 时间升序") {
                     ForEach(record.samples.indices, id: \.self) { index in
@@ -143,7 +196,7 @@ private struct ControllerHistoryDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(sample.timestamp, format: .dateTime.hour().minute().second())
                             Text("\(controllerNumber(sample.voltage, unit: "V")) · \(controllerNumber(sample.current, unit: "A")) · \(sample.rpm) RPM")
-                            Text("转把 \(controllerNumber(sample.throttle, unit: "V")) · 刹车 \(controllerNumber(sample.brake, unit: "V")) · 车速 \(controllerNumber(sample.speed, unit: "km/h"))")
+                            Text("转把 \(controllerNumber(sample.throttle, unit: "V")) · 刹车 \(controllerNumber(sample.brake, unit: "V")) · 车速 --")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -157,17 +210,39 @@ private struct ControllerHistoryDetailView: View {
             do { record = try store.load(id: id); errorText = nil }
             catch { errorText = "记录读取失败：\(error.localizedDescription)" }
         }
+    }
+}
+
+/// Persistent and unsaved records share the same isolated export/sheet lifecycle.
+private struct ControllerRecordExportButtons: View {
+    let record: ControllerHistoryRecord
+    let store: ControllerHistoryStore
+    @State private var errorText: String?
+    @State private var exportURL: URL?
+    @State private var showingExport = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Menu("导出并分享") {
+                ForEach(ControllerHistoryStore.ExportFormat.allCases, id: \.self) { format in
+                    Button("导出 \(format.rawValue.uppercased())") { export(format) }
+                }
+            }
+            .disabled(showingExport)
+            if let errorText { Text(errorText).font(.footnote).foregroundStyle(AppTheme.danger) }
+        }
         .sheet(isPresented: $showingExport, onDismiss: {
-            if let exportURL { try? FileManager.default.removeItem(at: exportURL) }
+            // exportForSharing owns this unique directory; never remove history or another snapshot.
+            if let exportURL { try? FileManager.default.removeItem(at: exportURL.deletingLastPathComponent()) }
             exportURL = nil
         }) {
             if let exportURL { ShareSheet(items: [exportURL]) }
         }
     }
 
-    private func export(_ record: ControllerHistoryRecord, format: ControllerHistoryStore.ExportFormat) {
+    private func export(_ format: ControllerHistoryStore.ExportFormat) {
         do {
-            exportURL = try store.export(record, format: format)
+            exportURL = try store.exportForSharing(record, format: format)
             errorText = nil
             showingExport = true
         } catch { errorText = "记录导出失败：\(error.localizedDescription)" }

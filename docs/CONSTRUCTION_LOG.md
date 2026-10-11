@@ -171,3 +171,62 @@
 - 实际归档 ced33b3 的 IPA 1717550 字节；模拟器单元测试161项与UI测试3项均0失败，CI日志已保存 build/ci/ced33b3/ci.log。
 - 当前公开仓库及新CI成功状态再次实查；不将账号额度故障的具体原因猜测为已诊断。
 - 后续风险：首页/复核子任务收到模型不可用错误（gpt-6.1-sol not supported with ChatGPT account），待提交源码必须由主线程接续复核；不把部分写入当完成。驾驶设置接线与加速领域仍在施工，无本批CI证据。
+
+## 步骤 019：继续接续后修复 Dashboard 未提交集成阻塞
+
+- 时间：2026-10-11 09:05:54 +08:00。
+- 触发：接续任务后复核当前未提交工作树；此前交接只记录了 G3 与阶段 3/4 的源码施工，未提供本批 macOS/Xcode 证据。
+- 发现：`Sources/Features/Dashboard/DashboardView.swift` 的新首页重构在 `body` 中途截断，缺少 `ScrollView`/`TimelineView`/`NavigationStack` 闭合；同时旧版连接、速度、行程、指标、状态和曲线卡片定义被截断，旧版布局分支还引用了不存在的 `parameterCard`。这是明确的源码级编译阻塞。
+- 修复：恢复 `body` 的完整闭合结构；从当前基线恢复未改变语义的卡片组件；补充兼容旧十卡片布局的 `parameterCard`，保留新版槽位布局、控制器占位和无数据显示为 `--` 的边界。
+- 验证：`git diff --check` 通过；Sources 下粗略括号检查不再报告 `DashboardView.swift`；未发现本机 `swift`、`xcodebuild` 或 `xcodegen`，因此尚未执行 Swift 编译、XCTest、模拟器测试或 macOS CI。
+- 状态：本地源码阻塞已修复；当前工作树仍有未提交改动，未提交、未推送；G3 真机和后台/锁屏验收仍未完成。下一步应在 macOS CI 对本批工作树对应提交执行编译/测试，再按 G3 顺序验收。
+
+## 步骤 020：真实首页与驾驶设置消费接线
+
+- 时间：2026-10-11 10:24:39 +08:00。
+- 新决定：继续完成可操作功能后由用户做真机测试；加速仅 RPM 单渠道，系数默认 0.0782，公式 km/h = rawRPM × 系数 × forwardSign。1000 RPM、正向默认换算为 78.2 km/h；不代表已实车校准。
+- 首页：27 槽位/39 指标模型接入运行页面，控制器 18 项不再无条件占位；读取独立控制器实时流，过期/暂停显示 --。RSSI 通过 BMS readRSSI 只读请求获取，10 秒过期撤下。底部故障框实际占两列。
+- 设置消费：字号比例、文字描述、功率条/真实功率曲线、放/充电功率基数、SOC/压差/温度颜色阈值、探头来源、速度满格及阈值生效；App 注入共享服务，两个启动自动连接开关分别消费，独立 UUID 记忆，手动动作抑制自动连接。
+- 集成修复：探头输入 Int.min 不再 index-1 溢出；曲线消费真实功率而非把电流冒充功率；控制器记录不再 nextUp 改接收时间，拒绝重复/倒退行并保存时序警告。
+- 回归：新增首页槽位/39 指标、动态归还持久化、故障跨列、不可用控制器、温度选择/Int.min 与阈值测试；加速领域新增单渠道/默认系数换算断言。
+- 证据：主线程 API/调用静态核对及 git diff --check；Tree-sitter 可做语法证明，但不是 Swift 类型检查、XCTest 或 iOS 运行证据。
+
+## 步骤 021：续航完整窗口指标与可操作页面
+
+- 时间：2026-10-11 10:24:39 +08:00。
+- 范围：RangeService、RangeView、RangeSettingsView、RangeServiceTests。
+- 实现：averageSpeedKmh 使用同一有效窗口距离/时长；referenceKmPerAh 使用同区间真实放电电流的梯形 Ah 积分并裁剪到 GPS 边界，不以 Wh/电压或总行程替代。安全状态即时撤下无效指标，节流仅用于预测。
+- 页面：显示实际窗口/刷新配置、额定容量、有效距离/能耗/Ah、平均速度及 km/Ah，提供 JSON/CSV、分享、可见错误和设备 UUID 隔离的确认重置。
+- 验证：子任务 4 文件语法检查、14 列 CSV 契约及积分数值复核通过；新增 8 项本轮回归用例。主线程已核对 Dashboard 接线。XCTest/原生编译尚未执行。
+
+## 步骤 022：行程逐样本 CSV 与分页
+
+- 时间：2026-10-11 10:24:39 +08:00。
+- 范围：TripStore、TripHistoryView、TripStoreTests。
+- 实现：逐样本 CSV 保留 TripSample 的真实字段/区间类别/有效性，缺失或非有限值留空，不造坐标；JSON/CSV 独立导出保存 Documents/Exports，关闭分享与删除源记录不删除副本。区间内每页 100 样本，曲线只绘当前页；窗口摘要每页 20 条。
+- 保留：旧 JSON、待保存行程导出、删除确认和失败重试。地图回放未实现，当前无逐点坐标数据。
+- 验证：新增 11 项回归测试；子任务语法/CSV 标准读写交叉核验、5000 组分页边界及10001样本无重复遗漏的模型复核通过。主线程已检查分享生命周期。XCTest/原生编译尚未执行。
+
+## 步骤 023：控制器 18 列 CSV/XLSX 和历史操作
+
+- 时间：2026-10-11 10:24:39 +08:00。
+- 范围：ControllerModels/ControllerProtocol/ControllerWorkbook、ControllerHistoryStore、ControllerView、相应领域/App 测试；主线程 ControllerBluetoothService 采样接线。
+- 实现：ControllerSample 可选完整 telemetry 兼容旧 JSON；18 列字段/顺序按 Android 导出核对，提供 CSV 和 OOXML XLSX；ZIP stored/CRC32，无 App 第三方依赖。JSON 保持原记录。所有 XLSX 单元格为文本，不执行公式。旧记录缺字段不补造，车速没有确认协议来源仍不可用。
+- 页面：导出 JSON/CSV/XLSX、独立分享快照、未保存内存记录导出、确认删除、读取失败提示、时序警告。完整遥测由蓝牙采样入口传入。
+- 证据：8 文件语法解析/静态契约通过；源码驱动 ZIP/CRC/XML/openpyxl 格式检查通过，但不是 Swift 二进制执行。主线程已核对 telemetry/timingWarning 接口。XCTest、Xcode 和真机分享未执行。
+
+## 步骤 024：RPM-only 加速服务、页面与最终集成复核
+
+- 时间：2026-10-11 10:27:32 +08:00。
+- 文件：Domain/Acceleration 两个文件、Services/AccelerationService、Features/Acceleration 两个页面、AccelerationServiceTests/AccelerationTests、App/Root/Settings 接入口。
+- 范围：仅控制器 RPM，默认系数 0.0782；可调整系数/目标/方向并保存本机偏好，会话开始后冻结配置。App 注入共享只读控制器服务，页面不建立另一条蓝牙链路，不生成模拟样本。
+- 界面：等待连续静止 2 秒、起步/目标分段、实时 RPM/车速/母线/相峰值电流、已确认累计/分段计时与距离、样本频率/间隙质量、历史详情、JSON 分享、确认删除、保存失败内存保留及重试。
+- 时序：计时使用手机收到完整快照事件时的单调时钟，不是硬件测量时刻；拒绝重复/倒退时钟、500ms 缺样、合批多帧时序歧义。控制器断连/暂停、App 离开前台中止并保存部分分段，不冒充已达标。
+- 回归：新增22项服务/存储 XCTest，含事件参数willSet、默认/编辑系数、开始前缓存、静止/分段、断连/后台/缺样/合批、保存失败/重试、旧ISO8601、路径保护与导出失败等。测试代码已写入，未原生执行。
+- 集成主线程核对：App 环境注入、Settings 导航、Root 生命周期与 stop(reason:) 参数一致；controller history telemetry/timingWarning 和首页窗口指标接口一致。只读审查发现的温度索引溢出、电流冒充功率、nextUp 人工时序已修复并二次复核。
+- 全工作树证据：71 个 Swift 文件 Tree-sitter 解析0语法错误；7个关键源码契约通过。报告 build/verification/current-worktree-static.json 明确 executedSwiftCompiler=false、executedXCTest=false。本机无Swift/Xcode；本批未生成IPA、未提交/推送，不套用旧CI。
+
+### 步骤025：提交并启动本批原生CI（北京时间 2026-10-11 10:31:14）
+- 用户授权提交、推送施工分支并在GitHub编译测试直到产出IPA。
+- 本批包含RPM单渠道（默认0.0782）、首页/驾驶设置、续航、行程和控制器导出及回归测试；静态检查通过，原生编译与XCTest等待本次CI。
+- 不改Android父仓库、不合并main；产物为unsigned IPA，真机验收仍独立。

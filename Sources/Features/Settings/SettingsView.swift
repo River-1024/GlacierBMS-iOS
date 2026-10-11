@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// 设置页。当前承载日志管理，后续可扩展校准、续航参数等。
+@MainActor
 struct SettingsView: View {
+    @EnvironmentObject private var driving: DrivingSettingsStore
     @State private var recordLevel: LogLevel = AppLog.shared.minimumLevel
 
     var body: some View {
@@ -51,11 +53,25 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    PlaceholderRow(title: "电池校准", message: "阶段 3 接入")
-                    PlaceholderRow(title: "续航参数", message: "阶段 3 接入")
-                    PlaceholderRow(title: "本地导出", message: "阶段 3 接入")
+                    NavigationLink { DrivingSettingsView(store: driving) } label: {
+                        Label("普通驾驶与显示设置", systemImage: "slider.horizontal.3")
+                    }
+                    NavigationLink { AccelerationView() } label: {
+                        Label("RPM 加速测试与历史", systemImage: "speedometer")
+                    }
+                    NavigationLink { ControllerView() } label: {
+                        Label("控制器与历史记录", systemImage: "engine.combustion")
+                    }
+                    NavigationLink { HomeParameterEditorView() } label: {
+                        Label("首页参数", systemImage: "rectangle.3.group")
+                    }
+                    NavigationLink { RangeView() } label: {
+                        Label("综合续航与容量", systemImage: "gauge.with.dots.needle.33percent")
+                    }
                 } header: {
-                    Text("后续功能")
+                    Text("驾驶设置")
+                } footer: {
+                    Text("首页参数支持草稿保存/取消；续航参数按本设备保存。")
                 }
             }
             .navigationTitle("设置")

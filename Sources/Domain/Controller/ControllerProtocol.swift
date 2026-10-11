@@ -1,7 +1,7 @@
 import Foundation
 
 /// All confirmed real-time fields, decoded independently of BLE and recording/UI concerns.
-public struct MotorControllerTelemetry: Equatable, Sendable {
+public struct MotorControllerTelemetry: Codable, Equatable, Sendable {
     public let controllerVoltageV: Double
     public let busCurrentA: Double
     public let rpm: Int

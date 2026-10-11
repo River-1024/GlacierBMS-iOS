@@ -11,6 +11,11 @@ final class RangeService: ObservableObject {
     @Published private(set) var status: RangePredictionStatus = .disconnected
     @Published private(set) var reasonText = "尚未绑定稳定设备 ID，无法安全接入实时续航"
     @Published private(set) var effectiveWhPerKm: Double?
+    /// 同一有效窗口的位移 / 区间时长，不读取 GPS 瞬时速度或总行程。
+    @Published private(set) var averageSpeedKmh: Double?
+    /// 同一有效窗口的 km / 真实放电电流积分 Ah；零 Ah 时无参考值。
+    @Published private(set) var referenceKmPerAh: Double?
+    @Published private(set) var accumulatedNetAh = 0.0
     @Published private(set) var nominalCapacityAh = 0.0 // 0 表示尚未设置，不是默认电池容量。
     @Published private(set) var deviceID: UUID?
     @Published private(set) var accumulatedDistanceMeters = 0.0
@@ -21,6 +26,7 @@ final class RangeService: ObservableObject {
 
     private let defaults: UserDefaults
     private let clock: () -> Date
+    private let exportDirectory: URL
     private var subscriptions = Set<AnyCancellable>()
     private var bmsService: BmsBluetoothService?
     private var locationService: LocationService?
@@ -35,18 +41,37 @@ final class RangeService: ObservableObject {
     private var intervals: [Interval] = []
     private static let bmsMaxAge: TimeInterval = 5
     private static let gpsMaxAge: TimeInterval = 10
-    private static let windowAge: TimeInterval = 300
+    @Published private(set) var windowAge: TimeInterval = 300
+    @Published private(set) var predictionRefreshInterval: TimeInterval = 0
+    private var lastPredictionAt: Date?
+    private var maximumIntervals = 256
 
     /// 无硬件构造入口：测试可使用隔离 UserDefaults/可控时钟，不触发蓝牙或定位权限。
-    init(defaults: UserDefaults = .standard, clock: @escaping () -> Date = Date.init) {
+    init(defaults: UserDefaults = .standard, clock: @escaping () -> Date = Date.init,
+         exportDirectory: URL = FileManager.default.temporaryDirectory) {
         self.defaults = defaults
         self.clock = clock
+        self.exportDirectory = exportDirectory
         notBefore = clock()
     }
 
     convenience init(bms: BmsBluetoothService, location: LocationService, defaults: UserDefaults = .standard) {
         self.init(defaults: defaults)
         observe(bms: bms, location: location)
+    }
+
+    /// 生产 App 显式配置；无硬件 init 的 5min/即时刷新契约保持不变。
+    /// 仅节流有效预测重算，安全状态仍在每次样本/1s heartbeat 立即检查。
+    func applyDrivingSettings(_ settings: DrivingSettings) {
+        let safe = settings.normalized()
+        let window = TimeInterval(safe.rangeWindowMinutes * 60)
+        let cadence = TimeInterval(safe.rangeRefreshSeconds)
+        guard windowAge != window || predictionRefreshInterval != cadence else { return }
+        windowAge = window
+        predictionRefreshInterval = cadence
+        maximumIntervals = max(256, Int(window) + 1)
+        lastPredictionAt = nil
+        refresh()
     }
 
     private func observe(bms: BmsBluetoothService, location: LocationService?) {
@@ -102,20 +127,27 @@ final class RangeService: ObservableObject {
             return false
         }
         nominalCapacityAh = value
+        lastPredictionAt = nil
         defaults.set(value, forKey: capacityKey(deviceID))
         lastError = nil
         refresh()
         return true
     }
 
-    /// 只重置当前设备的容量设置与有效窗口，不影响行程记录/其他设备/已导出文件。
-    func reset() {
-        if let deviceID { defaults.removeObject(forKey: capacityKey(deviceID)) }
-        nominalCapacityAh = 0
+    /// 只清除当前设备的有效窗口，保留额定容量和窗口/刷新设置。
+    /// 不删除行程记录或已导出文件；清除后页面不再把旧导出 URL 当作当前结果。
+    func clearWindow() {
         restartSampling()
         lastExportURL = nil
         lastError = nil
         refresh()
+    }
+
+    /// 只重置当前设备的容量设置与有效窗口，不影响行程记录/其他设备/已导出文件。
+    func reset() {
+        if let deviceID { defaults.removeObject(forKey: capacityKey(deviceID)) }
+        nominalCapacityAh = 0
+        clearWindow()
     }
 
     // 以下主线程事件接口也用于无硬件测试；真实路径由已有服务的 Published 流驱动。
@@ -197,6 +229,7 @@ final class RangeService: ObservableObject {
                   firstIndex < lastIndex else { continue }
             let samples = Array(bmsSamples[firstIndex...lastIndex])
             var energy = 0.0
+            var netAh = 0.0
             var covered = true
             for (a, b) in zip(samples, samples.dropFirst()) {
                 let dt = b.receivedAt.timeIntervalSince(a.receivedAt)
@@ -208,31 +241,35 @@ final class RangeService: ObservableObject {
                 guard upper > lower else { continue }
                 let wattsAtStart = p0 + (p1 - p0) * lower.timeIntervalSince(a.receivedAt) / dt
                 let wattsAtEnd = p0 + (p1 - p0) * upper.timeIntervalSince(a.receivedAt) / dt
-                energy += (wattsAtStart + wattsAtEnd) / 2 * upper.timeIntervalSince(lower) / 3_600
+                let ampsAtStart = a.current + (b.current - a.current) * lower.timeIntervalSince(a.receivedAt) / dt
+                let ampsAtEnd = a.current + (b.current - a.current) * upper.timeIntervalSince(a.receivedAt) / dt
+                let hours = upper.timeIntervalSince(lower) / 3_600
+                energy += (wattsAtStart + wattsAtEnd) / 2 * hours
+                netAh += (ampsAtStart + ampsAtEnd) / 2 * hours
             }
             let distance = haversineMeters(from: start, to: end)
             // 坐标位移须超过两点误差界，并排除 >60m/s 的定位跳变。
             let dt = end.timestamp.timeIntervalSince(start.timestamp)
-            guard covered, energy.isFinite, energy > 0, distance.isFinite,
+            guard covered, energy.isFinite, energy > 0, netAh.isFinite, netAh >= 0, distance.isFinite,
                   distance > start.horizontalAccuracy + end.horizontalAccuracy,
                   distance / dt <= 60 else {
                 invalidateWindow()
                 return
             }
             intervals.append(Interval(startedAt: start.timestamp, endedAt: end.timestamp,
-                                      distanceMeters: distance, netWh: energy))
+                                      distanceMeters: distance, netWh: energy, netAh: netAh))
         }
     }
 
     func refresh(now: Date? = nil) {
         let now = now ?? clock()
-        intervals.removeAll { now.timeIntervalSince($0.endedAt) > Self.windowAge }
-        if intervals.count > 256 { intervals.removeFirst(intervals.count - 256) }
+        intervals.removeAll { now.timeIntervalSince($0.endedAt) > windowAge }
+        // 60min 窗口不能被旧 256 条上限截成约 4min；1s 定位允许保留窗口内区间。
+        if intervals.count > maximumIntervals { intervals.removeFirst(intervals.count - maximumIntervals) }
         accumulatedDistanceMeters = intervals.reduce(0) { $0 + $1.distanceMeters }
         accumulatedNetWh = intervals.reduce(0) { $0 + $1.netWh }
+        accumulatedNetAh = intervals.reduce(0) { $0 + $1.netAh }
         validIntervalCount = intervals.count
-        prediction = nil
-        effectiveWhPerKm = nil
         guard let deviceID else { stop(.disconnected, "尚未绑定稳定设备 ID，无法安全接入实时续航"); return }
         guard connected else { stop(.disconnected); return }
         guard locationUpdating else { stop(.noValidIntervals, "定位流未启动或未接入；续航服务不会自动申请权限"); return }
@@ -256,6 +293,24 @@ final class RangeService: ObservableObject {
             remainingAh: snapshot.remainingAh, capacityAh: nominalCapacityAh) else {
             stop(.capacityInvalid); return
         }
+        // 窗口指标每次更新；刷新频率仅用于下面的续航预测，不延迟安全校验/真实测量值。
+        let distanceKm = accumulatedDistanceMeters / 1_000
+        let duration = intervals.reduce(0) { $0 + $1.endedAt.timeIntervalSince($1.startedAt) }
+        averageSpeedKmh = duration > 0 ? accumulatedDistanceMeters / duration * 3.6 : nil
+        if accumulatedNetAh > 0 {
+            let reference = distanceKm / accumulatedNetAh
+            referenceKmPerAh = reference.isFinite ? reference : nil
+        } else {
+            referenceKmPerAh = nil
+        }
+        effectiveWhPerKm = distanceKm > 0 ? accumulatedNetWh / distanceKm : nil
+        let shouldRefresh = lastPredictionAt.map {
+            now < $0 || now.timeIntervalSince($0) >= predictionRefreshInterval
+        } ?? true
+        // 首个有效窗口/状态恢复立即计算；有效预测期间遵守所选刷新频率。
+        if status == .valid, prediction != nil, accumulatedNetWh > 0,
+           accumulatedDistanceMeters > 0, !shouldRefresh { return }
+        lastPredictionAt = now
         let result = RangePredictor(settings: RangeSettings(nominalCapacityAh: nominalCapacityAh,
                                                             deviceID: deviceID.uuidString))
             .predict(remainingAh: snapshot.remainingAh, netWh: accumulatedNetWh,
@@ -263,10 +318,19 @@ final class RangeService: ObservableObject {
         prediction = result
         status = result.status
         reasonText = result.reasonText
-        if result.status == .valid { effectiveWhPerKm = accumulatedNetWh / (accumulatedDistanceMeters / 1_000) }
+        if result.status != .valid {
+            effectiveWhPerKm = nil
+            averageSpeedKmh = nil
+            referenceKmPerAh = nil
+        }
     }
 
     private func stop(_ value: RangePredictionStatus, _ reason: String? = nil) {
+        prediction = nil
+        effectiveWhPerKm = nil
+        averageSpeedKmh = nil
+        referenceKmPerAh = nil
+        lastPredictionAt = nil
         status = value
         reasonText = reason ?? value.reason
     }
@@ -279,12 +343,16 @@ final class RangeService: ObservableObject {
     }
 
     private func invalidateWindow() {
+        lastPredictionAt = nil
         previousFix = nil
         bmsSamples.removeAll()
         pending.removeAll()
         intervals.removeAll()
         accumulatedDistanceMeters = 0
         accumulatedNetWh = 0
+        accumulatedNetAh = 0
+        averageSpeedKmh = nil
+        referenceKmPerAh = nil
         validIntervalCount = 0
         effectiveWhPerKm = nil
         prediction = nil
@@ -323,10 +391,11 @@ final class RangeService: ObservableObject {
         let endedAt: Date
         let distanceMeters: Double
         let netWh: Double
+        let netAh: Double
     }
     private struct Export: Encodable {
         let energyDataVersion = AndroidEnergyCurve.version
-        let schemaVersion = 1
+        let schemaVersion = 2
         let model = "valid-window; Android built-in seed/legacy; learning disabled"
         let generatedAt: Date
         let deviceID: String?
@@ -337,6 +406,11 @@ final class RangeService: ObservableObject {
         let whPerKm: Double?
         let distanceMeters: Double
         let netWh: Double
+        let netAh: Double
+        let averageSpeedKmh: Double?
+        let referenceKmPerAh: Double?
+        let windowSeconds: TimeInterval
+        let predictionRefreshSeconds: TimeInterval
         let intervals: [Interval]
     }
 
@@ -346,7 +420,10 @@ final class RangeService: ObservableObject {
                              nominalCapacityAh: nominalCapacityAh > 0 ? nominalCapacityAh : nil,
                              status: status, reason: reasonText, predictedRangeKm: prediction?.predictedRangeKm,
                              whPerKm: effectiveWhPerKm, distanceMeters: accumulatedDistanceMeters,
-                             netWh: accumulatedNetWh, intervals: intervals)
+                             netWh: accumulatedNetWh, netAh: accumulatedNetAh,
+                             averageSpeedKmh: averageSpeedKmh, referenceKmPerAh: referenceKmPerAh,
+                             windowSeconds: windowAge, predictionRefreshSeconds: predictionRefreshInterval,
+                             intervals: intervals)
         return try writeExport(extension: "json") {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -362,9 +439,11 @@ final class RangeService: ObservableObject {
             nominalCapacityAh > 0 ? String(nominalCapacityAh) : "",
             String(accumulatedDistanceMeters), String(accumulatedNetWh),
             effectiveWhPerKm.map { String($0) } ?? "", prediction?.predictedRangeKm.map { String($0) } ?? "",
-            status.rawValue, reasonText
+            status.rawValue, reasonText, String(accumulatedNetAh),
+            averageSpeedKmh.map { String($0) } ?? "", referenceKmPerAh.map { String($0) } ?? "",
+            String(windowAge), String(predictionRefreshInterval)
         ].map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-        let csv = "generated_at,device_id,nominal_capacity_ah,distance_meters,net_wh,wh_per_km,predicted_range_km,status,reason\r\n"
+        let csv = "generated_at,device_id,nominal_capacity_ah,distance_meters,net_wh,wh_per_km,predicted_range_km,status,reason,net_ah,average_speed_kmh,reference_km_per_ah,window_seconds,prediction_refresh_seconds\r\n"
             + fields.joined(separator: ",") + "\r\n"
         return try writeExport(extension: "csv") { Data(csv.utf8) }
     }
@@ -377,8 +456,9 @@ final class RangeService: ObservableObject {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let url = FileManager.default.temporaryDirectory
+        let url = exportDirectory
             .appendingPathComponent("Range-\(formatter.string(from: clock()))-\(UUID().uuidString).\(suffix)")
+        lastExportURL = nil
         do {
             try data().write(to: url, options: .atomic)
             lastExportURL = url
