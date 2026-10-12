@@ -573,3 +573,7 @@
 - Run 38214797900 对应 514e8f607a164a0a76cc1d30e8e19f296472f615；五项源代码契约与 SwiftPM 通过，但 Xcode 在 NativeParameterGrid.swift 因 EnvironmentValues.accessibilityReduceMotion 是只读 KeyPath 而拒绝写入，模拟器测试未启动。
 - 移除只读环境值写入：保留 Dynamic Type/Color Scheme/Layout Direction 传递；减少动态效果改用 transaction 禁用动画，测试同样调整为 transaction。
 - 不改变拖动、数据或导航行为；再次提交并 dispatch 准确 SHA。
+
+#### 第三轮 CI 编译修复记录（2026-10-12 15:10:05 +08:00）
+
+- 补正上一轮修复中的文本替换残留，NativeParameterGrid 现在只使用合法的 transaction 条件修改，不写入只读 EnvironmentValues；减少动态效果仍由系统环境决定。

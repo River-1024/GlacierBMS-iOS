@@ -270,10 +270,11 @@ struct NativeParameterGrid: UIViewRepresentable {
                 .environment(\.dynamicTypeSize, parent.dynamicTypeSize)
                 .environment(\.colorScheme, parent.colorScheme)
                 .environment(\.layoutDirection, parent.layoutDirection)
-                .transaction { transaction in\n                    if parent.reduceMotion { transaction.animation = nil }\n                }
                 .transaction { transaction in
-                    transaction.animation = nil
-                    transaction.disablesAnimations = true
+                    if parent.reduceMotion {
+                        transaction.animation = nil
+                        transaction.disablesAnimations = true
+                    }
                 })
         }
 
@@ -500,7 +501,7 @@ struct NativeParameterGrid_Previews: PreviewProvider {
             previewGrid.previewDisplayName("编辑与空分类")
             previewGrid.preferredColorScheme(.dark).previewDisplayName("深色")
             previewGrid.environment(\.dynamicTypeSize, .accessibility5)
-                .environment(\.accessibilityReduceMotion, true)
+                .transaction { transaction in transaction.animation = nil }
                 .previewDisplayName("大字号与减少动态效果")
         }
     }
