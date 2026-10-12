@@ -163,12 +163,60 @@ final class DrivingSettingsStoreTests: XCTestCase {
             XCTAssertEqual(DrivingSettingsStore(defaults: defaults).settings, expected)
             XCTAssertEqual(service.windowAge, 900)
             XCTAssertEqual(service.predictionRefreshInterval, 10)
-            XCTAssertEqual(service.nominalCapacityAh, 112)
+            XCTAssertEqual(service.nominalCapacityAh, 0) // Legacy capacity must not become live telemetry.
             XCTAssertEqual(service.deviceID, id)
             XCTAssertEqual(defaults.string(forKey: BmsBluetoothService.rememberedDeviceDefaultsKey), id.uuidString)
             XCTAssertEqual(defaults.double(forKey: capacityKey), 112)
             XCTAssertEqual(defaults.data(forKey: "history.sentinel"), Data([4, 5, 6]))
             XCTAssertEqual(defaults.string(forKey: HomeParameterPrefs.key), homeLayout)
+            withExtendedLifetime(subscription) {}
+        }
+    }
+
+    @MainActor
+    func testDefaultRestorationNeverOverridesLiveBMSCapacityOrRevivesLegacyCapacityAfterClear() throws {
+        try withDefaults { defaults in
+            let clock = Clock()
+            let id = UUID()
+            let key = "com.zjsf.anturide.range.capacity.\(id.uuidString)"
+            defaults.set(72.0, forKey: key)
+            let store = DrivingSettingsStore(defaults: defaults)
+            var changed = DrivingSettings.defaults
+            changed.rangeWindowMinutes = 30
+            changed.rangeRefreshSeconds = 45
+            changed.bluetoothRefreshIntervalMs = 250
+            try store.save(changed)
+            let service = RangeService(defaults: defaults, clock: { clock.date })
+            service.setConnectionReady(true)
+            service.setLocationUpdating(true)
+            service.setDeviceID(id)
+            let subscription = store.$settings.sink { service.applyDrivingSettings($0) }
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            service.ingest(snapshot: snapshot(clock.date, capacityAh: 134))
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+
+            try store.restoreDrivingPreferencesDefaults()
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            XCTAssertEqual(service.windowAge, 1_800)
+            XCTAssertEqual(service.predictionRefreshInterval, 45)
+            try store.saveRangePreferences(windowMinutes: DrivingSettings.defaults.rangeWindowMinutes,
+                                           refreshSeconds: DrivingSettings.defaults.rangeRefreshSeconds)
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            XCTAssertEqual(service.windowAge, 900)
+            XCTAssertEqual(service.predictionRefreshInterval, 10)
+
+            service.clearWindow()
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            try store.restoreDefaults()
+            service.refresh()
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            XCTAssertEqual(service.validIntervalCount, 0)
+            XCTAssertNil(service.prediction)
+            XCTAssertEqual(defaults.double(forKey: key), 72)
+            clock.date = clock.date.addingTimeInterval(1)
+            service.ingest(snapshot: snapshot(clock.date))
+            XCTAssertEqual(service.nominalCapacityAh, 100)
+            XCTAssertNil(service.prediction) // No fresh GPS pair yet.
             withExtendedLifetime(subscription) {}
         }
     }
@@ -429,7 +477,6 @@ final class DrivingSettingsStoreTests: XCTestCase {
             service.setConnectionReady(true)
             service.setLocationUpdating(true)
             service.setDeviceID(UUID())
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             try body(service, clock)
         }
     }
@@ -443,14 +490,18 @@ final class DrivingSettingsStoreTests: XCTestCase {
             service.ingest(snapshot: snapshot(clock.date))
             service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.0002))
         }
-        // Deliberately invalidate the cache after the final GPS endpoint for the valid fixture.
-        XCTAssertTrue(service.updateNominalCapacityAh(100))
+        // Restart pairing with fresh inputs to expose the final window under configured cadence.
+        service.setLocationUpdating(false)
+        service.setLocationUpdating(true)
+        service.ingest(snapshot: snapshot(clock.date))
+        service.ingest(fix: fix(clock.date, longitude: 0.006))
+        XCTAssertEqual(service.status, .valid)
     }
 
     private func snapshot(_ date: Date, power: Double = 1000, current: Double? = nil,
-                          remainingAh: Double = 50) -> BmsSnapshot {
+                          remainingAh: Double = 50, capacityAh: Double = 100) -> BmsSnapshot {
         BmsSnapshot(receivedAt: date, totalVoltage: 66, current: current ?? (power < 0 ? -15 : 15), soc: 50,
-                    capacityAh: 100, remainingAh: remainingAh, temperatures: [], mosTemperature: 0,
+                    capacityAh: capacityAh, remainingAh: remainingAh, temperatures: [], mosTemperature: 0,
                     balancerTemperature: 0, cellVoltagesMillivolts: [3300], power: power,
                     statusCode: power < 0 ? 2 : 3, frameLength: 32)
     }

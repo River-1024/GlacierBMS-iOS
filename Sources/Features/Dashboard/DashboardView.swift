@@ -15,10 +15,10 @@ struct DashboardView: View {
     @ScaledMetric(relativeTo: .title2) private var primaryValueSize: CGFloat = 28
     @ScaledMetric(relativeTo: .title3) private var compactValueSize: CGFloat = 20
     // 与设置编辑器共用同一偏好键；保存后即使 Tab 未重建也会刷新。
-    @AppStorage(HomeParameterPrefs.key) private var storedLayout = ""
+    @AppStorage(HomeParameterPrefs.key, store: HomeParameterPrefs().defaults) private var storedLayout = ""
 
     private var homeConfig: HomeParameterConfig {
-        HomeParameterPrefs.decode(storedLayout) ?? .androidDefault
+        (HomeParameterPrefs.decode(storedLayout) ?? .androidDefault).forHome
     }
 
     var body: some View {
@@ -26,28 +26,9 @@ struct DashboardView: View {
             GeometryReader { geometry in
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let freshness = BmsFreshnessEvaluator().evaluate(snapshot: bms.latestSnapshot, now: context.date)
-                    let columns = Array(repeating: GridItem(.flexible(), spacing: 12),
-                                        count: geometry.size.width >= 600
-                                            && !dynamicTypeSize.isAccessibilitySize
-                                            && driving.settings.valueScale < 1.5 ? 2 : 1)
                     ScrollView {
                         VStack(spacing: 12) {
-                            if homeConfig.usesSlotLayout {
-                                slotDashboard(freshness: freshness, size: geometry.size)
-                            } else if homeConfig.visibleCardIDs.isEmpty {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("没有显示的首页参数").foregroundStyle(.secondary)
-                                    rangeLink
-                                }
-                            } else {
-                                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                                    ForEach(homeConfig.visibleCardIDs) { id in
-                                        parameterCard(id, freshness: freshness)
-                                            .accessibilityElement(children: .contain)
-                                            .accessibilityIdentifier("dashboard.card.\(id.rawValue)")
-                                    }
-                                }
-                            }
+                            slotDashboard(freshness: freshness, size: geometry.size)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
@@ -60,6 +41,10 @@ struct DashboardView: View {
             }
             // 仅根页隐藏导航栏，不忽略状态栏、刘海或 Tab 的系统安全区。
             .toolbar(.hidden, for: .navigationBar)
+            .task {
+                // 首次进入也持久化旧配置迁移；渲染不等待迁移即可使用槽位。
+                _ = HomeParameterPrefs().loadForHome()
+            }
         }
     }
 
@@ -74,46 +59,6 @@ struct DashboardView: View {
         }
         .accessibilityLabel("综合续航")
         .accessibilityIdentifier("dashboard.range")
-    }
-
-    /// 兼容已保存的旧版十卡片布局，不因切换到槽位布局而丢失用户偏好。
-    @ViewBuilder
-    private func parameterCard(_ id: HomeParameterCardID, freshness: BmsDataFreshness) -> some View {
-        let showsRangeLink = homeConfig.visibleCardIDs.first == id
-        switch id {
-        case .currentChart:
-            BmsHistoryChartCard(history: bms.snapshotHistory, metric: .current) {
-                if showsRangeLink { rangeLink }
-            }
-        case .status:
-            VStack(alignment: .leading, spacing: 8) {
-                if showsRangeLink { rangeLink }
-                StatusChipsCard(snapshot: freshness.level == .fresh ? bms.latestSnapshot : nil, isStale: freshness.level == .stale)
-            }
-        case .capacityAndHealth:
-            VStack(spacing: 8) {
-                slotCard(.init(slotId: id.rawValue, metricId: "bms_capacity"), freshness: freshness, showsRangeLink: showsRangeLink)
-                slotCard(.init(slotId: "soh", metricId: "bms_soh"), freshness: freshness)
-            }
-        default:
-            slotCard(.init(slotId: id.rawValue, metricId: legacyMetricID(id)), freshness: freshness,
-                     fontSize: primaryValueSize, showsRangeLink: showsRangeLink)
-        }
-    }
-
-    private func legacyMetricID(_ id: HomeParameterCardID) -> String {
-        switch id {
-        case .speed: return "app_gps_speed"
-        case .range: return "app_range"
-        case .stateOfCharge: return "bms_soc"
-        case .remainingCapacity: return "bms_remaining"
-        case .power: return "bms_power"
-        case .current: return "bms_current"
-        case .voltage: return "bms_voltage"
-        case .capacityAndHealth: return "bms_capacity"
-        case .status: return "bms_status"
-        case .currentChart: return "bms_current"
-        }
     }
 
     @ViewBuilder

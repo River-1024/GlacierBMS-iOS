@@ -16,30 +16,362 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertNil(service.effectiveWhPerKm)
             XCTAssertEqual(service.nominalCapacityAh, 0)
             XCTAssertTrue(service.reasonText.contains("设备 ID"))
-            XCTAssertFalse(service.updateNominalCapacityAh(100))
         }
     }
 
     @MainActor
-    func testCapacityPersistsAcrossInstancesAndIsIsolatedByStableDeviceUUID() throws {
+    func testLegacyCapacityDefaultsAreIgnoredAcrossDevicesAndColdStart() throws {
         try withService { service, clock in
-            XCTAssertTrue(service.updateNominalCapacityAh(72))
+            let keyA = "com.zjsf.anturide.range.capacity.\(deviceA.uuidString)"
+            let keyB = "com.zjsf.anturide.range.capacity.\(deviceB.uuidString)"
+            clock.defaults.set(72.0, forKey: keyA)
+            clock.defaults.set(48.0, forKey: keyB)
             service.setDeviceID(deviceB)
             XCTAssertEqual(service.nominalCapacityAh, 0)
-            XCTAssertTrue(service.updateNominalCapacityAh(48))
+            service.ingest(snapshot: snapshot(clock.date, remainingAh: 24, capacityAh: 80))
+            XCTAssertEqual(service.nominalCapacityAh, 80)
             service.setDeviceID(deviceA)
-            XCTAssertEqual(service.nominalCapacityAh, 72)
-            for invalid in [0.0, -1, .nan, .infinity] {
-                XCTAssertFalse(service.updateNominalCapacityAh(invalid))
-                XCTAssertEqual(service.nominalCapacityAh, 72)
-            }
-            let restored = RangeService(defaults: clock.defaults, clock: { clock.date })
-            restored.setDeviceID(deviceA)
-            XCTAssertEqual(restored.nominalCapacityAh, 72)
-            service.reset()
             XCTAssertEqual(service.nominalCapacityAh, 0)
-            service.setDeviceID(deviceB)
-            XCTAssertEqual(service.nominalCapacityAh, 48)
+            service.ingest(snapshot: snapshot(clock.date, capacityAh: 134))
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+
+            let restored = RangeService(defaults: clock.defaults, clock: { clock.date })
+            restored.setConnectionReady(true)
+            restored.setLocationUpdating(true)
+            restored.setDeviceID(deviceA)
+            XCTAssertEqual(restored.nominalCapacityAh, 0)
+            restored.ingest(snapshot: snapshot(clock.date))
+            XCTAssertEqual(restored.nominalCapacityAh, 100)
+            XCTAssertEqual(clock.defaults.double(forKey: keyA), 72)
+            XCTAssertEqual(clock.defaults.double(forKey: keyB), 48)
+        }
+    }
+
+    @MainActor
+    func testLegacyCapacityCannotSelectPredictionCurve() throws {
+        for legacy in [72.0, 134, 10_001] {
+            try withService { service, clock in
+                let key = "com.zjsf.anturide.range.capacity.\(deviceA.uuidString)"
+                clock.defaults.set(legacy, forKey: key)
+                service.setDeviceID(nil)
+                service.setDeviceID(deviceA)
+                XCTAssertEqual(service.nominalCapacityAh, 0)
+                seedValidWindow(service, clock)
+                let consumption = try XCTUnwrap(service.effectiveWhPerKm)
+                let energy = try XCTUnwrap(AndroidEnergyCurve.remainingEnergyWh(remainingAh: 50, capacityAh: 100))
+                XCTAssertEqual(service.nominalCapacityAh, 100)
+                XCTAssertEqual(try XCTUnwrap(service.prediction?.predictedRangeKm), energy / consumption, accuracy: 1e-9)
+                XCTAssertEqual(clock.defaults.double(forKey: key), legacy)
+            }
+        }
+    }
+
+    @MainActor
+    func testAutomatic134AhCapacityUsesSeedPrediction() throws {
+        try withService { service, clock in
+            seedValidWindow(service, clock, capacityAh: 134)
+            let consumption = try XCTUnwrap(service.effectiveWhPerKm)
+            let seedEnergy = try XCTUnwrap(AndroidEnergyCurve.remainingEnergyWh(remainingAh: 50, capacityAh: 134))
+            let x = 50.0 / 134
+            let legacyEnergy = 50 * (66 + 9.8679 * x - 7.7636 * x * x + 5.8888 * x * x * x)
+            XCTAssertNotEqual(seedEnergy, legacyEnergy, accuracy: 1e-6)
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            XCTAssertEqual(try XCTUnwrap(service.prediction?.predictedRangeKm), seedEnergy / consumption, accuracy: 1e-9)
+        }
+    }
+
+    @MainActor
+    func testOtherAutomaticCapacitiesUseUnscaledLegacyPrediction() throws {
+        for capacity in [48.0, 72, 100, 200] {
+            try withService { service, clock in
+                let remaining = capacity / 2
+                seedValidWindow(service, clock, capacityAh: capacity, remainingAh: remaining)
+                let x = remaining / capacity
+                let energy = remaining * (66 + 9.8679 * x - 7.7636 * x * x + 5.8888 * x * x * x)
+                let consumption = try XCTUnwrap(service.effectiveWhPerKm)
+                XCTAssertEqual(service.nominalCapacityAh, capacity)
+                XCTAssertEqual(try XCTUnwrap(service.prediction?.predictedRangeKm), energy / consumption, accuracy: 1e-9)
+            }
+        }
+    }
+
+    @MainActor
+    func testInvalidBMSCapacityWithdrawsLiveCapacityAndBreaksPairingWithoutDeletingHistory() throws {
+        for capacity in [0.0, -1, .nan, .infinity, -.infinity, 10_000.000001] {
+            try withService { service, clock in
+                seedValidWindow(service, clock)
+                let wh = service.accumulatedNetWh
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date, capacityAh: capacity))
+                service.ingest(fix: fix(clock.date, longitude: 0.0062))
+                assertUnavailable(service, status: .capacityInvalid)
+                XCTAssertEqual(service.nominalCapacityAh, 0)
+                XCTAssertEqual(service.validIntervalCount, 30)
+                XCTAssertEqual(service.accumulatedNetWh, wh)
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date))
+                service.ingest(fix: fix(clock.date, longitude: 0.0064))
+                XCTAssertEqual(service.nominalCapacityAh, 100)
+                XCTAssertEqual(service.validIntervalCount, 30)
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date))
+                service.ingest(fix: fix(clock.date, longitude: 0.0066))
+                XCTAssertEqual(service.validIntervalCount, 31)
+                XCTAssertEqual(service.accumulatedNetWh, wh + 990.0 / 3_600, accuracy: 1e-9)
+            }
+        }
+    }
+
+    @MainActor
+    func testRemainingAhMustBeFiniteAndWithinCurrentSnapshotCapacity() throws {
+        for remaining in [-0.000001, Double.nan, .infinity, -.infinity, 100.000001] {
+            try withService { service, clock in
+                seedValidWindow(service, clock)
+                let wh = service.accumulatedNetWh
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date, remainingAh: remaining))
+                service.ingest(fix: fix(clock.date, longitude: 0.0062))
+                assertUnavailable(service, status: .capacityInvalid)
+                XCTAssertEqual(service.nominalCapacityAh, 0)
+                XCTAssertEqual(service.validIntervalCount, 30)
+                XCTAssertEqual(service.accumulatedNetWh, wh)
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date))
+                service.ingest(fix: fix(clock.date, longitude: 0.0064))
+                XCTAssertEqual(service.nominalCapacityAh, 100)
+                XCTAssertEqual(service.validIntervalCount, 30)
+            }
+        }
+    }
+
+    @MainActor
+    func testCapacityUpperBoundAndRemainingAhEndpointsAreAccepted() throws {
+        for (capacity, remaining) in [(0.000001, 0.0), (100.0, 0.0), (100.0, 100.0),
+                                      (10_000.0, 0.0), (10_000.0, 10_000.0)] {
+            try withService { service, clock in
+                service.ingest(snapshot: snapshot(clock.date, remainingAh: remaining, capacityAh: capacity))
+                XCTAssertEqual(service.nominalCapacityAh, capacity)
+                assertUnavailable(service, status: .accumulating) // Capacity is valid; GPS is missing.
+                XCTAssertEqual(service.validIntervalCount, 0)
+            }
+        }
+    }
+
+    @MainActor
+    func testEveryExactCapacityChangeClearsWindowAndGPSEndpointBeforeRebuild() throws {
+        // Curve selection has a tolerance; evidence identity must not reuse that tolerance.
+        for capacity in [134.0, 100.0000005] {
+            try withService { service, clock in
+                var settings = DrivingSettings.defaults
+                settings.rangeRefreshSeconds = 60
+                service.applyDrivingSettings(settings)
+                seedValidWindow(service, clock)
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date, capacityAh: capacity))
+                XCTAssertEqual(service.nominalCapacityAh, capacity)
+                XCTAssertEqual(service.validIntervalCount, 0)
+                XCTAssertEqual(service.effectiveDuration, 0)
+                XCTAssertEqual(service.accumulatedDistanceMeters, 0)
+                XCTAssertEqual(service.accumulatedNetWh, 0)
+                XCTAssertEqual(service.accumulatedNetAh, 0)
+                XCTAssertNil(service.prediction)
+                XCTAssertNil(service.effectiveWhPerKm)
+                service.ingest(fix: fix(clock.date, longitude: 0.0062))
+                XCTAssertEqual(service.validIntervalCount, 0) // Cannot join to the old GPS endpoint.
+                for second in 1...30 {
+                    clock.advance(1)
+                    service.ingest(snapshot: snapshot(clock.date, capacityAh: capacity))
+                    service.ingest(fix: fix(clock.date, longitude: 0.0062 + Double(second) * 0.0002))
+                }
+                XCTAssertEqual(service.validIntervalCount, 30)
+                XCTAssertEqual(service.accumulatedNetWh, 8.25, accuracy: 1e-9)
+                // Rebuild is real evidence; cadence may still be holding the first empty cache.
+                settings.rangeRefreshSeconds = 10
+                service.applyDrivingSettings(settings)
+                XCTAssertEqual(service.status, .valid)
+            }
+        }
+    }
+
+    @MainActor
+    func testCapacityChangeAfterInvalidSnapshotStillRejectsOldEvidence() throws {
+        try withService { service, clock in
+            seedValidWindow(service, clock, capacityAh: 134)
+            clock.advance(1)
+            service.ingest(snapshot: snapshot(clock.date, capacityAh: 0))
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            XCTAssertEqual(service.validIntervalCount, 30)
+            clock.advance(1)
+            service.ingest(snapshot: snapshot(clock.date))
+            XCTAssertEqual(service.nominalCapacityAh, 100)
+            XCTAssertEqual(service.validIntervalCount, 0)
+            service.ingest(fix: fix(clock.date, longitude: 0.0064))
+            XCTAssertEqual(service.validIntervalCount, 0)
+            XCTAssertNil(service.prediction)
+        }
+    }
+
+    @MainActor
+    func testStoredWindowV2IncludesEvidenceCapacityButNeverRestoresLiveCapacity() throws {
+        try withService { service, clock in
+            seedValidWindow(service, clock, capacityAh: 134)
+            service.setConnectionReady(false) // Flush the complete, device-isolated window.
+            let key = "com.zjsf.anturide.range.driving.\(deviceA.uuidString)"
+            let data = try XCTUnwrap(clock.defaults.data(forKey: key))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let version = try XCTUnwrap(object["version"] as? String)
+            XCTAssertEqual(version, "android-driving-window-v2-bms-capacity")
+            XCTAssertEqual(try XCTUnwrap(object["capacityAh"] as? Double), 134)
+            XCTAssertEqual(object["deviceID"] as? String, deviceA.uuidString)
+            XCTAssertEqual(try XCTUnwrap(object["intervals"] as? [[String: Any]]).count, 30)
+            XCTAssertNil(clock.defaults.object(forKey: "com.zjsf.anturide.range.capacity.\(deviceA.uuidString)"))
+
+            let restored = RangeService(defaults: clock.defaults, clock: { clock.date })
+            restored.setConnectionReady(true)
+            restored.setLocationUpdating(true)
+            restored.setDeviceID(deviceA)
+            XCTAssertEqual(restored.validIntervalCount, 30)
+            XCTAssertEqual(restored.nominalCapacityAh, 0)
+            XCTAssertNil(restored.prediction)
+            restored.refresh()
+            XCTAssertEqual(restored.nominalCapacityAh, 0)
+        }
+    }
+
+    @MainActor
+    func testFirstValidSnapshotChecksEvidenceCapacityOnReconnectAndColdStart() throws {
+        for coldStart in [false, true] {
+            for capacity in [100.0, 134, 100.0000005] {
+                try withService { service, clock in
+                    seedValidWindow(service, clock)
+                    let wh = service.accumulatedNetWh
+                    service.setConnectionReady(false)
+                    clock.advance(60)
+                    let restored = coldStart
+                        ? RangeService(defaults: clock.defaults, clock: { clock.date }) : service
+                    restored.setConnectionReady(true)
+                    restored.setLocationUpdating(true)
+                    restored.setDeviceID(deviceA)
+                    XCTAssertEqual(restored.nominalCapacityAh, 0)
+                    XCTAssertEqual(restored.validIntervalCount, 30)
+                    XCTAssertNil(restored.prediction)
+                    restored.ingest(snapshot: snapshot(clock.date, capacityAh: 0))
+                    XCTAssertEqual(restored.nominalCapacityAh, 0)
+                    XCTAssertEqual(restored.validIntervalCount, 30) // Not the first valid BMS yet.
+                    clock.advance(1)
+                    restored.ingest(snapshot: snapshot(clock.date, capacityAh: capacity))
+                    XCTAssertEqual(restored.nominalCapacityAh, capacity)
+                    let expectedCount = capacity == 100 ? 30 : 0
+                    XCTAssertEqual(restored.validIntervalCount, expectedCount)
+                    XCTAssertEqual(restored.accumulatedNetWh, capacity == 100 ? wh : 0)
+                    restored.ingest(fix: fix(clock.date, longitude: 0.0062))
+                    XCTAssertEqual(restored.validIntervalCount, expectedCount)
+                    clock.advance(1)
+                    restored.ingest(snapshot: snapshot(clock.date, capacityAh: capacity))
+                    restored.ingest(fix: fix(clock.date, longitude: 0.0064))
+                    XCTAssertEqual(restored.validIntervalCount, expectedCount + 1)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testLegacyWindowWithoutCapacityMetadataCannotBeTrusted() throws {
+        try withService { service, clock in
+            seedValidWindow(service, clock)
+            service.setConnectionReady(false)
+            let key = "com.zjsf.anturide.range.driving.\(deviceA.uuidString)"
+            let data = try XCTUnwrap(clock.defaults.data(forKey: key))
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            object["version"] = "android-driving-window-v1-seed-only"
+            object.removeValue(forKey: "capacityAh")
+            clock.defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: key)
+            let restored = RangeService(defaults: clock.defaults, clock: { clock.date })
+            restored.setConnectionReady(true)
+            restored.setLocationUpdating(true)
+            restored.setDeviceID(deviceA)
+            XCTAssertEqual(restored.nominalCapacityAh, 0)
+            XCTAssertEqual(restored.validIntervalCount, 0)
+            restored.ingest(snapshot: snapshot(clock.date))
+            restored.ingest(fix: fix(clock.date, longitude: 0.006))
+            XCTAssertEqual(restored.nominalCapacityAh, 100)
+            XCTAssertEqual(restored.validIntervalCount, 0)
+            XCTAssertNil(restored.prediction)
+        }
+    }
+
+    @MainActor
+    func testV2WindowRequiresValidCapacityMetadataAndMatchingDeviceIdentity() throws {
+        for scenario in 0..<5 {
+            try withService { service, clock in
+                seedValidWindow(service, clock)
+                service.setConnectionReady(false)
+                let key = "com.zjsf.anturide.range.driving.\(deviceA.uuidString)"
+                let data = try XCTUnwrap(clock.defaults.data(forKey: key))
+                var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                XCTAssertEqual(object["version"] as? String, "android-driving-window-v2-bms-capacity")
+                switch scenario {
+                case 0: object.removeValue(forKey: "capacityAh")
+                case 1: object["capacityAh"] = 0.0
+                case 2: object["capacityAh"] = 10_001.0
+                case 3: object["capacityAh"] = "100"
+                default: object["deviceID"] = deviceB.uuidString
+                }
+                clock.defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: key)
+                let restored = RangeService(defaults: clock.defaults, clock: { clock.date })
+                restored.setConnectionReady(true)
+                restored.setLocationUpdating(true)
+                restored.setDeviceID(deviceA)
+                XCTAssertEqual(restored.nominalCapacityAh, 0)
+                XCTAssertEqual(restored.validIntervalCount, 0)
+                restored.ingest(snapshot: snapshot(clock.date))
+                restored.ingest(fix: fix(clock.date, longitude: 0.006))
+                XCTAssertEqual(restored.nominalCapacityAh, 100)
+                XCTAssertEqual(restored.validIntervalCount, 0)
+                XCTAssertNil(restored.prediction)
+            }
+        }
+    }
+
+    @MainActor
+    func testLiveCapacityExpiresAtBMSFreshnessBoundaryAndNeedsNewValidTelemetry() throws {
+        try withService { service, clock in
+            service.ingest(snapshot: snapshot(clock.date, capacityAh: 134))
+            let oldTime = clock.date
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            clock.advance(30)
+            service.refresh()
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            clock.advance(0.000001)
+            service.refresh()
+            assertUnavailable(service, status: .telemetryStale)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            service.ingest(snapshot: snapshot(oldTime, capacityAh: 134))
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            service.ingest(snapshot: snapshot(clock.date))
+            XCTAssertEqual(service.nominalCapacityAh, 100)
+            XCTAssertNil(service.prediction) // New BMS alone is not new GPS evidence.
+        }
+    }
+
+    @MainActor
+    func testSamplingRestartWithdrawsCapacityUntilNewBMSWithoutErasingEvidence() throws {
+        try withService { service, clock in
+            seedValidWindow(service, clock)
+            let wh = service.accumulatedNetWh
+            let oldTime = clock.date
+            clock.advance(1)
+            service.setLocationUpdating(false)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            XCTAssertEqual(service.accumulatedNetWh, wh)
+            service.setLocationUpdating(true)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            service.ingest(snapshot: snapshot(oldTime))
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            service.ingest(snapshot: snapshot(clock.date, capacityAh: 134))
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            XCTAssertEqual(service.validIntervalCount, 0) // Restart must retain capacity identity, not just live data.
+            XCTAssertNil(service.prediction)
         }
     }
 
@@ -71,7 +403,6 @@ final class RangeServiceTests: XCTestCase {
             var settings = DrivingSettings.defaults
             settings.bluetoothRefreshIntervalMs = 5_000
             service.applyDrivingSettings(settings) // 2x query cadence, capped at Android's 10s maximum.
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             service.ingest(snapshot: snapshot(clock.date))
             service.ingest(fix: fix(clock.date, longitude: 0))
             clock.advance(10)
@@ -139,6 +470,7 @@ final class RangeServiceTests: XCTestCase {
                 service.ingest(snapshot: snapshot(clock.date, power: nil, frameLength: length, current: current, voltage: voltage))
                 service.ingest(fix: fix(clock.date, longitude: 0.0062))
                 XCTAssertNil(service.prediction?.predictedRangeKm)
+                XCTAssertEqual(service.nominalCapacityAh, 0)
                 XCTAssertEqual(service.accumulatedNetWh, wh)
                 clock.advance(1)
                 service.ingest(snapshot: snapshot(clock.date))
@@ -160,6 +492,7 @@ final class RangeServiceTests: XCTestCase {
             clock.advance(3_600)
             service.refresh()
             assertUnavailable(service, status: .telemetryStale)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
             XCTAssertEqual(service.validIntervalCount, 30)
             XCTAssertEqual(service.effectiveDuration, 30)
             XCTAssertEqual(service.accumulatedNetWh, 8.25, accuracy: 1e-9)
@@ -175,6 +508,7 @@ final class RangeServiceTests: XCTestCase {
                 service.ingest(snapshot: snapshot(clock.date))
             }
             assertUnavailable(service, status: .telemetryStale)
+            XCTAssertEqual(service.nominalCapacityAh, 100) // BMS is fresh even though GPS is stale.
             XCTAssertEqual(service.validIntervalCount, 30)
         }
     }
@@ -254,6 +588,7 @@ final class RangeServiceTests: XCTestCase {
             service.setConnectionReady(false)
             assertUnavailable(service, status: .disconnected)
             XCTAssertNil(service.deviceID)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
             service.setConnectionReady(true)
             clock.advance(60)
             service.ingest(snapshot: snapshot(clock.date))
@@ -263,10 +598,11 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertEqual(service.nominalCapacityAh, 0)
             XCTAssertEqual(service.validIntervalCount, 0)
             service.setDeviceID(deviceA)
-            XCTAssertEqual(service.nominalCapacityAh, 100)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
             XCTAssertEqual(service.accumulatedNetWh, wh)
             XCTAssertNil(service.prediction?.predictedRangeKm)
             service.ingest(snapshot: snapshot(clock.date))
+            XCTAssertEqual(service.nominalCapacityAh, 100)
             service.ingest(fix: fix(clock.date, longitude: 0.05))
             XCTAssertEqual(service.validIntervalCount, 30)
             XCTAssertNil(service.prediction?.predictedRangeKm)
@@ -279,23 +615,42 @@ final class RangeServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testClearWindowPreservesCapacityButResetRemovesIt() throws {
-        try withService { service, clock in
-            seedValidWindow(service, clock)
-            XCTAssertTrue(service.updateNominalCapacityAh(72))
-            XCTAssertNotNil(service.prediction)
+    func testClearWindowAndResetRequireNewBMSAndGPSEndpoints() throws {
+        for reset in [false, true] {
+            try withService { service, clock in
+                seedValidWindow(service, clock, capacityAh: 72)
+                let oldTime = clock.date
+                clock.advance(1)
+                if reset { service.reset() } else { service.clearWindow() }
+                XCTAssertEqual(service.nominalCapacityAh, 0)
+                XCTAssertEqual(service.validIntervalCount, 0)
+                XCTAssertEqual(service.accumulatedDistanceMeters, 0)
+                XCTAssertEqual(service.accumulatedNetWh, 0)
+                XCTAssertNil(service.prediction)
+                XCTAssertNil(service.effectiveWhPerKm)
+                service.refresh()
+                XCTAssertEqual(service.nominalCapacityAh, 0)
 
-            service.clearWindow()
-            XCTAssertEqual(service.nominalCapacityAh, 72)
-            XCTAssertEqual(service.validIntervalCount, 0)
-            XCTAssertEqual(service.accumulatedDistanceMeters, 0)
-            XCTAssertEqual(service.accumulatedNetWh, 0)
-            XCTAssertNil(service.prediction)
-            XCTAssertNil(service.effectiveWhPerKm)
-
-            service.reset()
-            XCTAssertEqual(service.nominalCapacityAh, 0)
-            XCTAssertEqual(service.validIntervalCount, 0)
+                service.ingest(snapshot: snapshot(oldTime, capacityAh: 72))
+                service.ingest(fix: fix(oldTime, longitude: 0.006))
+                XCTAssertEqual(service.nominalCapacityAh, 0)
+                service.ingest(fix: fix(clock.date, longitude: 0.0062))
+                XCTAssertEqual(service.validIntervalCount, 0)
+                XCTAssertEqual(service.nominalCapacityAh, 0)
+                service.ingest(snapshot: snapshot(clock.date, capacityAh: 72))
+                XCTAssertEqual(service.nominalCapacityAh, 72)
+                XCTAssertEqual(service.validIntervalCount, 0)
+                XCTAssertNil(service.prediction)
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date, capacityAh: 72))
+                service.ingest(fix: fix(clock.date, longitude: 0.0064))
+                XCTAssertEqual(service.validIntervalCount, 0) // First paired endpoint, not a bridge.
+                clock.advance(1)
+                service.ingest(snapshot: snapshot(clock.date, capacityAh: 72))
+                service.ingest(fix: fix(clock.date, longitude: 0.0066))
+                XCTAssertEqual(service.validIntervalCount, 1)
+                XCTAssertEqual(service.accumulatedNetWh, 990.0 / 3_600, accuracy: 1e-9)
+            }
         }
     }
 
@@ -329,7 +684,7 @@ final class RangeServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testJSONSchemaThreeAndCSVExportPreserveFieldsAndStaleHistory() throws {
+    func testJSONSchemaFourAndCSVExportPreserveFieldsAndStaleHistory() throws {
         try withService { service, clock in
             seedValidWindow(service, clock)
             let jsonURL = try service.exportJSONURL()
@@ -342,7 +697,9 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertEqual(json["status"] as? String, "valid")
             XCTAssertEqual(json["deviceID"] as? String, deviceA.uuidString)
             XCTAssertNotNil(json["predictedRangeKm"])
-            XCTAssertEqual(json["schemaVersion"] as? Int, 3)
+            XCTAssertEqual(json["schemaVersion"] as? Int, 4)
+            XCTAssertEqual(json["capacitySource"] as? String, "fresh BMS capacityAh; manual preferences ignored")
+            XCTAssertEqual(json["nominalCapacityAh"] as? Double, 100)
             for key in ["energyDataVersion", "model", "generatedAt", "nominalCapacityAh", "reason",
                         "whPerKm", "distanceMeters", "netWh", "windowSeconds", "predictionRefreshSeconds"] {
                 XCTAssertNotNil(json[key], "Missing legacy export field: \(key)")
@@ -390,6 +747,10 @@ final class RangeServiceTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: emptyURL) }
             let empty = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: emptyURL)) as? [String: Any])
             XCTAssertEqual(empty["status"] as? String, "telemetryStale")
+            XCTAssertEqual(empty["schemaVersion"] as? Int, 4)
+            XCTAssertEqual(empty["capacitySource"] as? String, json["capacitySource"] as? String)
+            XCTAssertNil(empty["nominalCapacityAh"]) // Retained evidence is not live capacity.
+            XCTAssertEqual(service.nominalCapacityAh, 0)
             XCTAssertNil(empty["predictedRangeKm"])
             XCTAssertNil(empty["whPerKm"])
             XCTAssertNil(empty["averageSpeedKmh"])
@@ -404,7 +765,6 @@ final class RangeServiceTests: XCTestCase {
     @MainActor
     func testPartialBMSTimeCoverageDoesNotBorrowUnrelatedEnergy() throws {
         try withService { service, clock in
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             service.ingest(fix: fix(clock.date, longitude: 0))
             clock.advance(1)
             service.ingest(snapshot: snapshot(clock.date))
@@ -417,16 +777,15 @@ final class RangeServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testCapacityMustBeConfiguredAndCannotBeLessThanMeasuredRemainingAh() throws {
+    func testValidBMSAutomaticallySuppliesCapacityWithoutManualConfiguration() throws {
         try withService { service, clock in
-            service.ingest(snapshot: snapshot(clock.date))
-            assertUnavailable(service, status: .capacityInvalid)
-            XCTAssertTrue(service.updateNominalCapacityAh(10))
-            trajectory(service, clock, seconds: 30)
-            assertUnavailable(service, status: .capacityInvalid)
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
-            trajectory(service, clock, seconds: 30)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            service.ingest(snapshot: snapshot(clock.date, capacityAh: 134))
+            XCTAssertEqual(service.nominalCapacityAh, 134)
+            assertUnavailable(service, status: .accumulating)
+            trajectory(service, clock, seconds: 30, capacityAh: 134)
             XCTAssertEqual(service.status, .valid)
+            XCTAssertEqual(service.nominalCapacityAh, 134)
         }
     }
 
@@ -468,7 +827,6 @@ final class RangeServiceTests: XCTestCase {
     @MainActor
     func testZeroMeasuredCurrentDoesNotInventWhFromReportedPowerOrCapacity() throws {
         try withService { service, clock in
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             trajectory(service, clock, seconds: 30, current: 0)
             XCTAssertEqual(service.accumulatedNetWh, 0)
             XCTAssertEqual(service.accumulatedDischargeWh, 0)
@@ -511,7 +869,6 @@ final class RangeServiceTests: XCTestCase {
             service.applyDrivingSettings(settings)
             XCTAssertEqual(service.windowAge, 3_600)
             XCTAssertEqual(service.predictionRefreshInterval, 10)
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             service.ingest(snapshot: snapshot(clock.date))
             service.ingest(fix: fix(clock.date, longitude: 0))
             for index in 1...400 {
@@ -590,27 +947,33 @@ final class RangeServiceTests: XCTestCase {
                     service.ingest(snapshot: snapshot(clock.date, power: -132, status: 2, current: -2))
                     service.ingest(fix: fix(clock.date, longitude: 0.006, speed: 0))
                     assertUnavailable(service, status: .charging)
+                    XCTAssertEqual(service.nominalCapacityAh, 100)
                 case 1:
                     clock.advance(1)
                     service.ingest(snapshot: snapshot(clock.date, status: 5))
                     assertUnavailable(service, status: .noValidIntervals)
+                    XCTAssertEqual(service.nominalCapacityAh, 0)
                 case 2:
                     clock.advance(31)
                     service.refresh()
                     assertUnavailable(service, status: .telemetryStale)
+                    XCTAssertEqual(service.nominalCapacityAh, 0)
                 case 3:
                     service.setConnectionReady(false)
                     assertUnavailable(service, status: .disconnected)
+                    XCTAssertEqual(service.nominalCapacityAh, 0)
                 case 4:
                     clock.advance(1)
                     service.ingest(snapshot: snapshot(clock.date, remainingAh: 101))
                     assertUnavailable(service, status: .capacityInvalid)
+                    XCTAssertEqual(service.nominalCapacityAh, 0)
                 case 5:
                     for _ in 0..<31 {
                         clock.advance(1)
                         service.ingest(snapshot: snapshot(clock.date))
                     }
                     assertUnavailable(service, status: .telemetryStale)
+                    XCTAssertEqual(service.nominalCapacityAh, 100) // Only GPS is stale.
                 default:
                     for _ in 0..<31 {
                         clock.advance(1)
@@ -627,8 +990,11 @@ final class RangeServiceTests: XCTestCase {
     func testClearAndResetPreserveConfigurationOtherDevicesAndExportedFile() throws {
         try withService { service, clock in
             service.setDeviceID(deviceB)
-            XCTAssertTrue(service.updateNominalCapacityAh(48))
+            seedValidWindow(service, clock, capacityAh: 48, remainingAh: 24)
+            let whB = service.accumulatedNetWh
             service.setDeviceID(deviceA)
+            let legacyKey = "com.zjsf.anturide.range.capacity.\(deviceA.uuidString)"
+            clock.defaults.set(72.0, forKey: legacyKey)
             var settings = DrivingSettings.defaults
             settings.rangeWindowMinutes = 30
             settings.rangeRefreshSeconds = 60
@@ -642,7 +1008,7 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertNil(service.referenceKmPerAh)
             XCTAssertNil(service.lastExportURL)
             XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
-            XCTAssertEqual(service.nominalCapacityAh, 100)
+            XCTAssertEqual(service.nominalCapacityAh, 0)
             XCTAssertEqual(service.windowAge, 1_800)
             XCTAssertEqual(service.predictionRefreshInterval, 60)
             service.reset()
@@ -650,8 +1016,12 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertEqual(service.windowAge, 1_800)
             XCTAssertEqual(service.predictionRefreshInterval, 60)
             service.setDeviceID(deviceB)
-            XCTAssertEqual(service.nominalCapacityAh, 48)
+            XCTAssertEqual(clock.defaults.double(forKey: legacyKey), 72) // Reset does not manage legacy preferences.
+            XCTAssertEqual(service.nominalCapacityAh, 0)
+            XCTAssertEqual(service.accumulatedNetWh, whB)
             XCTAssertEqual(service.accumulatedNetAh, 0)
+            service.ingest(snapshot: snapshot(clock.date, remainingAh: 24, capacityAh: 48))
+            XCTAssertEqual(service.nominalCapacityAh, 48)
         }
     }
 
@@ -685,7 +1055,6 @@ final class RangeServiceTests: XCTestCase {
     func testDurationDistanceAndDischargeThresholdsAreIndependent() throws {
         for (seconds, meters, wh) in [(29, 300.0, 8.0), (30, 199.9, 8.0), (30, 300.0, 4.99), (30, 200.1, 5.01)] {
             try withService { service, clock in
-                XCTAssertTrue(service.updateNominalCapacityAh(100))
                 trajectory(service, clock, seconds: seconds, metersPerSecond: meters / Double(seconds),
                            current: wh * 3_600 / (66 * Double(seconds)), power: nil)
                 XCTAssertEqual(service.effectiveDuration, Double(seconds), accuracy: 1e-9)
@@ -706,7 +1075,6 @@ final class RangeServiceTests: XCTestCase {
     func testSpeedThresholdUsesThreeKmhNotOneMeterPerSecondOrInstantaneousGPS() throws {
         for kmh in [2.99, 3.2] {
             try withService { service, clock in
-                XCTAssertTrue(service.updateNominalCapacityAh(100))
                 // 0.9m/s = 3.24km/h; the former 1m/s check incorrectly rejected it.
                 trajectory(service, clock, seconds: 300, metersPerSecond: kmh / 3.6, speed: 0.9)
                 if kmh < 3 {
@@ -741,7 +1109,6 @@ final class RangeServiceTests: XCTestCase {
     @MainActor
     func testMissingReportedPowerStillAccumulatesMeasuredVoltageTimesCurrent() throws {
         try withService { service, clock in
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             trajectory(service, clock, seconds: 30, power: nil)
             XCTAssertEqual(service.status, .valid)
             XCTAssertEqual(service.accumulatedNetWh, 8.25, accuracy: 1e-9)
@@ -773,7 +1140,6 @@ final class RangeServiceTests: XCTestCase {
     @MainActor
     func testNoPastBMSCannotBorrowFutureCallbackOrBackfillAlreadyRejectedGPS() throws {
         try withService { service, clock in
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             service.ingest(fix: fix(clock.date, longitude: 0))
             clock.advance(1)
             service.ingest(fix: fix(clock.date, longitude: 0.0002))
@@ -811,8 +1177,7 @@ final class RangeServiceTests: XCTestCase {
             seedValidWindow(service, clock)
             let whA = service.accumulatedNetWh
             service.setDeviceID(deviceB)
-            XCTAssertTrue(service.updateNominalCapacityAh(80))
-            trajectory(service, clock, seconds: 30)
+            trajectory(service, clock, seconds: 30, capacityAh: 80)
             let whB = service.accumulatedNetWh
             // 真实冷恢复的前置：BLE 断开（断连会 flush 完整驾驶证据，不受节流持久化截断）。
             service.setConnectionReady(false)
@@ -822,7 +1187,7 @@ final class RangeServiceTests: XCTestCase {
             restored.setConnectionReady(true)
             restored.setLocationUpdating(true)
             restored.setDeviceID(deviceA)
-            XCTAssertEqual(restored.nominalCapacityAh, 100)
+            XCTAssertEqual(restored.nominalCapacityAh, 0)
             XCTAssertEqual(restored.accumulatedNetWh, whA, accuracy: 1e-9)
             XCTAssertEqual(restored.effectiveDuration, 30)
             XCTAssertNil(restored.prediction?.predictedRangeKm)
@@ -838,7 +1203,7 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertEqual(restored.status, .valid)
 
             restored.setDeviceID(deviceB)
-            XCTAssertEqual(restored.nominalCapacityAh, 80)
+            XCTAssertEqual(restored.nominalCapacityAh, 0)
             XCTAssertEqual(restored.accumulatedNetWh, whB, accuracy: 1e-9)
             XCTAssertEqual(restored.effectiveDuration, 30)
         }
@@ -943,7 +1308,6 @@ final class RangeServiceTests: XCTestCase {
             var settings = DrivingSettings.defaults
             settings.rangeWindowMinutes = 3
             service.applyDrivingSettings(settings)
-            XCTAssertTrue(service.updateNominalCapacityAh(100))
             service.ingest(snapshot: snapshot(clock.date, current: 15, remainingAh: 50))
             service.ingest(fix: fix(clock.date, longitude: 0))
             for second in stride(from: 10, through: 180, by: 10) {
@@ -987,32 +1351,37 @@ final class RangeServiceTests: XCTestCase {
     }
 
     @MainActor
-    private func seedValidWindow(_ service: RangeService, _ clock: Clock) {
-        XCTAssertTrue(service.updateNominalCapacityAh(100))
-        service.ingest(snapshot: snapshot(clock.date))
+    private func seedValidWindow(_ service: RangeService, _ clock: Clock,
+                                 capacityAh: Double = 100, remainingAh: Double = 50) {
+        service.ingest(snapshot: snapshot(clock.date, remainingAh: remainingAh, capacityAh: capacityAh))
         service.ingest(fix: fix(clock.date, longitude: 0))
         for second in 1...30 {
             clock.advance(1)
-            service.ingest(snapshot: snapshot(clock.date))
+            service.ingest(snapshot: snapshot(clock.date, remainingAh: remainingAh, capacityAh: capacityAh))
             service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.0002))
         }
-        // A settings cadence may have sampled just before the final GPS callback.
-        // Explicit capacity application invalidates that cache for this reusable valid fixture.
-        XCTAssertTrue(service.updateNominalCapacityAh(100))
+        // Re-pair fresh inputs after a sampling restart so configured cadence fixtures
+        // expose the complete window without using a removed manual-capacity cache hook.
+        if service.predictionRefreshInterval > 0 {
+            service.setLocationUpdating(false)
+            service.setLocationUpdating(true)
+            service.ingest(snapshot: snapshot(clock.date, remainingAh: remainingAh, capacityAh: capacityAh))
+            service.ingest(fix: fix(clock.date, longitude: 0.006))
+        }
         XCTAssertEqual(service.status, .valid)
     }
 
     @MainActor
     private func trajectory(_ service: RangeService, _ clock: Clock, seconds: Int,
                             metersPerSecond: Double? = nil, current: Double = 15,
-                            speed: Double = 22, power: Double? = 1_000) {
+                            speed: Double = 22, power: Double? = 1_000, capacityAh: Double = 100) {
         let metersPerDegree = 6_371_008.8 * Double.pi / 180
         let step = metersPerSecond.map { $0 / metersPerDegree } ?? 0.0002
-        service.ingest(snapshot: snapshot(clock.date, power: power, current: current))
+        service.ingest(snapshot: snapshot(clock.date, power: power, current: current, capacityAh: capacityAh))
         service.ingest(fix: fix(clock.date, longitude: 0, speed: speed))
         for second in 1...seconds {
             clock.advance(1)
-            service.ingest(snapshot: snapshot(clock.date, power: power, current: current))
+            service.ingest(snapshot: snapshot(clock.date, power: power, current: current, capacityAh: capacityAh))
             service.ingest(fix: fix(clock.date, longitude: Double(second) * step, speed: speed))
         }
     }
@@ -1031,9 +1400,9 @@ final class RangeServiceTests: XCTestCase {
 
     private func snapshot(_ date: Date, power: Double? = 1_000, status: Int = 3,
                           frameLength: Int = 32, current: Double = 15, remainingAh: Double = 50,
-                          voltage: Double = 66) -> BmsSnapshot {
+                          voltage: Double = 66, capacityAh: Double = 100) -> BmsSnapshot {
         BmsSnapshot(receivedAt: date, totalVoltage: voltage, current: current, soc: 50,
-                    capacityAh: 100, remainingAh: remainingAh, temperatures: [], mosTemperature: 0,
+                    capacityAh: capacityAh, remainingAh: remainingAh, temperatures: [], mosTemperature: 0,
                     balancerTemperature: 0, cellVoltagesMillivolts: [3_300], power: power,
                     statusCode: status, frameLength: frameLength)
     }

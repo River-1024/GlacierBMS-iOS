@@ -48,15 +48,15 @@ struct RangeView: View {
                 }
             }
             Section {
-                LabeledContent("额定容量", value: range.nominalCapacityAh > 0
-                    ? String(format: "%.1f Ah", range.nominalCapacityAh) : "尚未设置")
+                LabeledContent("BMS 总容量", value: range.nominalCapacityAh > 0
+                    ? String(format: "%.1f Ah", range.nominalCapacityAh) : "--")
                 Text(range.deviceID?.uuidString ?? "未绑定稳定设备 ID；不能以设备名称隔离电池设置。")
                     .font(.caption)
                     .textSelection(.enabled)
             } header: {
                 Text("当前设备")
             } footer: {
-                Text("修改窗口、刷新、设备容量或重置，请前往「设置 → 综合续航设置」。本页仅查看结果与导出。")
+                Text("修改窗口、刷新或清除驾驶窗口，请前往「设置 → 综合续航设置」。本页仅查看结果与导出。")
             }
             Section {
                 Button("生成 JSON") { generateJSON() }
@@ -82,7 +82,7 @@ struct RangeView: View {
             Section("估计边界") {
                 Text("续航使用最近累计 \(windowMinutes) 分钟的有效驾驶区间和安卓内置能量曲线（\(AndroidEnergyCurve.version)）。区间平均速度须达到 3 km/h；至少积累 30 秒、200 米、5 Wh 放电和 5 Wh 净能耗。移动回收从放电中扣除；停车不推进窗口，缺口与坏区间不补算，也不淘汰旧驾驶证据。")
                 Text("窗口平均速度按有效位移与区间时长计算；参考电耗按相同区间 BMS 剩余 Ah 差值计算 km/Ah，不使用总行程，也不以 Wh/电压推算 Ah。净 Ah 不为正时不显示参考电耗。")
-                Text("额定容量与驾驶证据按当前稳定外设 UUID 本机保存；重连仍需新的 BMS/GPS，遥测或最后驾驶证据超过 30 秒不显示预测。页面不会执行电池学习或校准，也不会导入手机私有学习数据库；状态不满足条件时不显示续航数值。")
+                Text("总容量自动读取当前 BMS；驾驶证据按稳定外设 UUID 本机保存，恢复时校验 BMS 容量，容量变化会清除旧窗口；重连仍需新的 BMS/GPS，遥测或最后驾驶证据超过 30 秒不显示预测。页面不会执行电池学习或校准，也不会导入手机私有学习数据库；状态不满足条件时不显示续航数值。")
             }
             .font(.caption)
             .foregroundStyle(.secondary)

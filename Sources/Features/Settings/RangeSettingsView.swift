@@ -5,17 +5,13 @@ import SwiftUI
 struct RangeSettingsView: View {
     @EnvironmentObject private var range: RangeService
     @EnvironmentObject private var driving: DrivingSettingsStore
-    @State private var capacityText = ""
     @State private var windowMinutes = DrivingSettings.defaults.rangeWindowMinutes
     @State private var refreshSeconds = DrivingSettings.defaults.rangeRefreshSeconds
-    @State private var validationError: String?
     @State private var settingsNotice: String?
     @State private var settingsError: String?
     @State private var confirmingRestoreDefaults = false
     @State private var confirmingClear = false
-    @State private var confirmingReset = false
     @State private var confirmationDeviceID: UUID?
-    @FocusState private var editingCapacity: Bool
 
     var body: some View {
         Form {
@@ -53,33 +49,25 @@ struct RangeSettingsView: View {
             } header: {
                 Text("窗口与刷新")
             } footer: {
-                Text("窗口和刷新为全局偏好，所有设备共用；容量单独按设备保存。窗口按累计有效驾驶时长保留证据，停车不推进；数据过期、停车充电和保护状态会立即撤下续航。结果和导出在「仪表盘 → 综合续航」查看。")
+                Text("窗口和刷新为全局偏好，所有设备共用；总容量自动读取当前 BMS，不需要手动设置。窗口按累计有效驾驶时长保留证据，停车不推进；数据过期、停车充电和保护状态会立即撤下续航。结果和导出在「仪表盘 → 综合续航」查看。")
             }
 
             Section {
-                HStack {
-                    Text("额定容量")
-                    TextField("尚未设置", text: $capacityText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .focused($editingCapacity)
-                        .accessibilityIdentifier("range.capacity")
-                    Text("Ah").foregroundStyle(.secondary)
-                }
-                Button("保存本设备容量") { saveCapacity() }
-                    .disabled(range.deviceID == nil)
-                    .accessibilityIdentifier("range.save.capacity")
-                if let error = validationError {
-                    Text(error).font(.caption).foregroundStyle(.red)
+                LabeledContent("BMS 总容量", value: range.nominalCapacityAh > 0
+                    ? String(format: "%.1f Ah", range.nominalCapacityAh) : "--")
+                    .accessibilityIdentifier("range.capacity.readout")
+                if range.nominalCapacityAh <= 0 {
+                    Text(range.deviceID == nil ? "未连接设备，等待 BMS 容量。" : "等待当前设备新鲜、有效的 BMS 容量。")
+                        .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("设备参数")
+                Text("自动读取的设备参数")
             } footer: {
-                Text("请填写电池真实额定容量；不会预填假定的 100 Ah。容量按稳定外设 UUID 保存，仅修改本设备。")
+                Text("容量与剩余 Ah 来自当前 BMS；有效的 134 Ah 容量使用安卓内置能量表，其他容量使用安卓 legacy 公式。缺失、无效或过期数据不会用手填值或默认值替代。")
             }
 
             Section {
-                Text(range.deviceID?.uuidString ?? "未连接设备；连接 BMS 后可设置本设备容量。")
+                Text(range.deviceID?.uuidString ?? "未连接设备；连接 BMS 后自动读取容量。")
                     .font(.caption)
                     .textSelection(.enabled)
                 Button("清除当前有效窗口", role: .destructive) {
@@ -88,28 +76,18 @@ struct RangeSettingsView: View {
                 }
                 .disabled(range.deviceID == nil)
                 .accessibilityIdentifier("range.clear.window")
-                Button("重置本设备容量与窗口", role: .destructive) {
-                    confirmationDeviceID = range.deviceID
-                    confirmingReset = true
-                }
-                .disabled(range.deviceID == nil)
-                .accessibilityIdentifier("range.reset.device")
             } footer: {
-                Text("清除窗口会保留本设备容量；重置会同时删除本设备容量设置。两者都不删除其他设备设置、行程记录或已导出文件。")
+                Text("清除仅影响本设备有效驾驶窗口，之后等待新的 BMS/GPS 样本；不修改 BMS 容量、不删除其他设备证据、行程记录或已导出文件。")
             }
         }
         .navigationTitle("综合续航设置")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            reloadCapacity()
             reloadRangeSettings()
         }
         .onChange(of: range.deviceID) { _ in
             confirmingClear = false
-            confirmingReset = false
             confirmationDeviceID = nil
-            editingCapacity = false
-            reloadCapacity()
         }
         .onChange(of: driving.settings) { _ in
             reloadRangeSettings()
@@ -131,30 +109,8 @@ struct RangeSettingsView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("只清除当前有效行驶区间，额定容量和窗口/刷新设置保留。")
+            Text("只清除当前有效行驶区间并重新等待 BMS/GPS；窗口/刷新设置保留，不修改 BMS 总容量。")
         }
-        .confirmationDialog("重置本设备容量与窗口？", isPresented: $confirmingReset, titleVisibility: .visible) {
-            Button("重置", role: .destructive) {
-                guard let id = confirmationDeviceID, id == range.deviceID else { return }
-                editingCapacity = false
-                range.reset()
-                reloadCapacity()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("清除当前设备的额定容量设置与有效窗口，不能撤销；不恢复全局窗口/刷新，也不删除其他设备容量、行程或导出文件。")
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("完成") { editingCapacity = false }
-            }
-        }
-    }
-
-    private func reloadCapacity() {
-        capacityText = range.nominalCapacityAh > 0 ? range.nominalCapacityAh.formatted(.number) : ""
-        validationError = nil
     }
 
     private func reloadRangeSettings() {
@@ -176,18 +132,4 @@ struct RangeSettingsView: View {
         }
     }
 
-    private func saveCapacity() {
-        // 与本地化显示格式一致（例如小数逗号地区），也接受普通点号输入。
-        let text = capacityText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = (try? Double(text, format: .number)) ?? Double(text), value.isFinite, value > 0 else {
-            validationError = "请输入大于零的有效容量（Ah）"
-            return
-        }
-        guard range.updateNominalCapacityAh(value) else {
-            validationError = range.lastError
-            return
-        }
-        editingCapacity = false
-        reloadCapacity()
-    }
 }

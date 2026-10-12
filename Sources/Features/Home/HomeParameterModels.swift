@@ -54,7 +54,7 @@ struct HomeParameterCardPlacement: Codable, Equatable, Identifiable {
 /// 首页卡片的完整布局：数组顺序是显示顺序，isVisible 决定是否显示。
 struct HomeParameterConfig: Codable, Equatable {
     var cards: [HomeParameterCardPlacement]
-    /// nil 表示兼容旧 10 卡片模式；非 nil 表示安卓槽位分配模式。
+    /// nil 仅用于解码旧十卡片配置；首页运行时通过 forHome 统一使用槽位。
     var assignments: [HomeParameterAssignment]? = nil
 
     static let androidDefault = Self(cards: Self.default.cards, assignments: HomeParameterSlotDefinition.all.map {
@@ -62,6 +62,13 @@ struct HomeParameterConfig: Codable, Equatable {
     })
 
     var usesSlotLayout: Bool { assignments != nil }
+
+    /// 旧卡片配置只保留解码兼容性，不再驱动首页或编辑器。
+    /// 有效定制保留全部分配（包括动态归还槽），仅规范显示顺序。
+    var forHome: Self {
+        guard isValid(), usesSlotLayout else { return .androidDefault }
+        return normalized()
+    }
 
     static let `default` = Self(cards: HomeParameterCardID.allCases.map { HomeParameterCardPlacement(id: $0) })
 
@@ -148,7 +155,7 @@ struct HomeParameterPrefs {
 
     let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = HomeParameterPrefs.homeDefaults) {
         self.defaults = defaults
     }
 
@@ -159,9 +166,23 @@ struct HomeParameterPrefs {
         return decoded
     }
 
-    /// 新安装使用槽位模式；已有 v1 卡片配置原样保留，坏数据整套回退。
+    /// 编辑器和 Dashboard 共用存储；DEBUG UI 回归使用独立套件并支持重启。
+    static var homeDefaults: UserDefaults {
+        #if DEBUG
+        if let suite = ProcessInfo.processInfo.environment["ANTURIDE_UI_TEST_HOME_SUITE"],
+           suite.hasPrefix("UITest-Home-"), let defaults = UserDefaults(suiteName: suite) {
+            return defaults
+        }
+        #endif
+        return .standard
+    }
+
+    /// 首页加载边界迁移旧配置；有效槽位定制不重写，坏数据仅回退显示。
     func loadForHome() -> HomeParameterConfig {
-        Self.decode(defaults.string(forKey: Self.key)) ?? .androidDefault
+        guard let decoded = Self.decode(defaults.string(forKey: Self.key)) else { return .androidDefault }
+        let config = decoded.forHome
+        if !decoded.usesSlotLayout { save(config) }
+        return config
     }
 
     @discardableResult
@@ -456,12 +477,6 @@ extension HomeParameterEditSession {
     func select(slotId: String, metricId: String) -> Self {
         guard let result = draft.candidate(slotId: slotId, metricId: metricId).result else { return self }
         return Self(baseline: baseline, draft: result)
-    }
-
-    func usingSlotLayout(_ enabled: Bool) -> Self {
-        var config = draft
-        config.assignments = enabled ? (draft.assignments ?? HomeParameterConfig.androidDefault.assignments) : nil
-        return Self(baseline: baseline, draft: config)
     }
 }
 

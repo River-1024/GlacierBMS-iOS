@@ -106,12 +106,15 @@ final class ANTuRideUITests: XCTestCase {
         rangeEntry.tap()
         XCTAssertTrue(app.navigationBars["综合续航设置"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["range.save.settings"].exists)
-        let capacity = app.textFields["range.capacity"]
+        let capacity = app.descendants(matching: .any)["range.capacity.readout"].firstMatch
         for _ in 0..<3 {
             if capacity.exists { break }
             app.swipeUp()
         }
         XCTAssertTrue(capacity.exists)
+        XCTAssertFalse(app.textFields["range.capacity"].exists)
+        XCTAssertFalse(app.buttons["range.save.capacity"].exists)
+        XCTAssertFalse(app.buttons["range.reset.device"].exists)
         // 导出属于结果页，不在设置页提供第二套入口。
         XCTAssertFalse(app.buttons["range.settings.export.json"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()

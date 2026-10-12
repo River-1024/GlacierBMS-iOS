@@ -24,13 +24,13 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("settings.driving")
                     NavigationLink { HomeParameterEditorView() } label: {
-                        Label("首页参数与布局", systemImage: "rectangle.3.group")
+                        Label("首页参数", systemImage: "rectangle.3.group")
                     }
                     .accessibilityIdentifier("settings.home")
                 } header: {
                     Text("驾驶与显示")
                 } footer: {
-                    Text("主题、字号、功率图、颜色阈值、BMS 查询周期在驾驶设置中修改；首页布局独立保存，未保存的草稿不会生效。")
+                    Text("主题、字号、功率图、颜色阈值、BMS 查询周期在驾驶设置中修改；首页固定使用槽位布局，槽位指标独立保存，未保存的草稿不会生效。")
                 }
 
                 Section {
@@ -41,7 +41,7 @@ struct SettingsView: View {
                 } header: {
                     Text("综合续航")
                 } footer: {
-                    Text("窗口与刷新为所有设备共用的偏好，额定容量按设备 UUID 保存。续航结果与 JSON/CSV 导出从「仪表盘 → 综合续航」查看。")
+                    Text("窗口与刷新为所有设备共用的偏好，总容量自动读取当前 BMS，无需再次填写。续航结果与 JSON/CSV 导出从「仪表盘 → 综合续航」查看。")
                 }
 
                 Section {

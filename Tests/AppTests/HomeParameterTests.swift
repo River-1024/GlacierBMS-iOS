@@ -264,4 +264,128 @@ final class HomeParameterTests: XCTestCase {
         XCTAssertEqual(HomeMetricPresentation.tone("bms_power", snapshot: snapshot, speedKmh: nil, settings: settings), .red)
     }
 
+
+    func testHomeLoadMigratesLegacyNilAssignmentsAndPersistsSlotDefaults() throws {
+        let legacy = HomeParameterConfig.default
+            .settingVisibility(false, for: .speed)
+            .moving(fromOffsets: IndexSet(integer: 9), toOffset: 0)
+        XCTAssertTrue(prefs.save(legacy))
+        let legacyRaw = try XCTUnwrap(defaults.string(forKey: HomeParameterPrefs.key))
+        XCTAssertEqual(HomeParameterPrefs.decode(legacyRaw), legacy, "旧 JSON 解码保持兼容")
+        XCTAssertEqual(legacy.forHome, .androidDefault, "Dashboard 解析旧配置也只能得到槽位布局")
+
+        XCTAssertEqual(prefs.loadForHome(), .androidDefault)
+        let migratedRaw = try XCTUnwrap(defaults.string(forKey: HomeParameterPrefs.key))
+        XCTAssertTrue(migratedRaw.contains("\"version\":2"))
+        XCTAssertEqual(HomeParameterPrefs.decode(migratedRaw), .androidDefault)
+        XCTAssertEqual(HomeParameterPrefs(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+            .loadForHome(), .androidDefault)
+    }
+
+    func testHomeLoadDefaultsForMissingMalformedAndInvalidAssignments() {
+        XCTAssertEqual(prefs.loadForHome(), .androidDefault)
+        for raw in ["not-json", "{\"version\":99}", "{\"version\":2,\"assignments\":[]}"] {
+            defaults.set(raw, forKey: HomeParameterPrefs.key)
+            XCTAssertEqual(prefs.loadForHome(), .androidDefault, raw)
+        }
+        var invalid = HomeParameterConfig.androidDefault
+        invalid.assignments = []
+        XCTAssertEqual(invalid.forHome, .androidDefault)
+    }
+
+    func testHomeLoadPreservesCustomizedAssignmentsAndDynamicReturnedSlots() throws {
+        let customized = try XCTUnwrap(HomeParameterConfig.androidDefault
+            .candidate(slotId: "top_speed", metricId: "controller_rpm").result)
+        let returned = try XCTUnwrap(customized.assignments?.first {
+            $0.slotId == "vehicle_extra_app_gps_speed"
+        })
+        XCTAssertEqual(returned.metricId, "app_gps_speed")
+        XCTAssertNil(customized.metricId(for: "controller_rpm"))
+        XCTAssertTrue(prefs.save(customized))
+        let raw = defaults.string(forKey: HomeParameterPrefs.key)
+
+        XCTAssertEqual(prefs.loadForHome(), customized.normalized())
+        XCTAssertEqual(customized.forHome, customized.normalized())
+        XCTAssertEqual(defaults.string(forKey: HomeParameterPrefs.key), raw,
+                       "读取有效定制不应重写持久化内容")
+        XCTAssertEqual(HomeParameterPrefs(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+            .loadForHome().assignments, customized.normalized().assignments)
+    }
+
+    func testLegacyCodableWithoutAssignmentsRemainsDecodable() throws {
+        let data = try JSONEncoder().encode(HomeParameterConfig.default)
+        let legacy = try JSONDecoder().decode(HomeParameterConfig.self, from: data)
+        XCTAssertNil(legacy.assignments)
+        XCTAssertEqual(legacy, .default)
+        XCTAssertEqual(legacy.forHome, .androidDefault)
+        let customized = try XCTUnwrap(HomeParameterConfig.androidDefault
+            .candidate(slotId: "top_speed", metricId: "controller_rpm").result)
+        XCTAssertEqual(try JSONDecoder().decode(HomeParameterConfig.self,
+            from: JSONEncoder().encode(customized)), customized)
+    }
+
+    func testSlotSelectionCancelSaveAndRelaunchUseOnlySavedConfiguration() throws {
+        let initial = prefs.loadForHome()
+        var session = HomeParameterEditSession.start(saved: initial)
+        session = session.select(slotId: "top_speed", metricId: "controller_rpm")
+        XCTAssertTrue(session.isDirty)
+        XCTAssertEqual(session.baseline, initial)
+        XCTAssertEqual(prefs.loadForHome(), initial, "选择只修改草稿")
+        XCTAssertEqual(session.cancel().draft, initial)
+        XCTAssertFalse(session.cancel().isDirty)
+
+        XCTAssertTrue(prefs.save(session.draft))
+        session = session.markSaved()
+        XCTAssertFalse(session.isDirty)
+        let relaunchedPrefs = HomeParameterPrefs(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+        let relaunched = relaunchedPrefs.loadForHome()
+        XCTAssertEqual(relaunched, session.baseline)
+        XCTAssertEqual(relaunched.forHome.metricId(for: "top_speed"), "controller_rpm")
+        XCTAssertTrue(relaunched.assignments(in: .vehicle).contains {
+            $0.slotId == "vehicle_extra_app_gps_speed" && $0.metricId == "app_gps_speed"
+        })
+    }
+
+    func testSlotRestoreCancelPreservesCustomizationUntilSaved() throws {
+        let saved = try XCTUnwrap(HomeParameterConfig.androidDefault
+            .candidate(slotId: "top_speed", metricId: "controller_rpm").result)
+        XCTAssertTrue(prefs.save(saved))
+        let session = HomeParameterEditSession.start(saved: prefs.loadForHome())
+        let restored = session.restoreDefaults()
+        XCTAssertEqual(restored.draft, .androidDefault)
+        XCTAssertEqual(restored.baseline, saved)
+        XCTAssertTrue(restored.isDirty)
+        XCTAssertEqual(restored.cancel().draft, saved)
+        XCTAssertEqual(prefs.loadForHome(), saved)
+        XCTAssertTrue(prefs.save(restored.draft))
+        XCTAssertEqual(prefs.loadForHome(), .androidDefault)
+    }
+
+
+    func testLegacyAndroidV1SlotCustomizationIsNotMigratedToDefaults() throws {
+        let customized = try XCTUnwrap(HomeParameterConfig.androidDefault
+            .candidate(slotId: "top_speed", metricId: "bms_soc").result)
+        let encoded = try XCTUnwrap(HomeParameterPrefs.encode(customized))
+        let data = try XCTUnwrap(encoded.data(using: .utf8))
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload["version"] = 1
+        payload.removeValue(forKey: "cards")
+        let raw = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        defaults.set(raw, forKey: HomeParameterPrefs.key)
+
+        XCTAssertEqual(prefs.loadForHome(), customized)
+        XCTAssertEqual(prefs.loadForHome().metricId(for: "top_speed"), "bms_soc")
+        XCTAssertEqual(defaults.string(forKey: HomeParameterPrefs.key), raw)
+    }
+
+
+    func testTopSlotReadoutTitleComesFromSelectedMetricNotOriginalSlot() throws {
+        let customized = try XCTUnwrap(HomeParameterConfig.androidDefault
+            .candidate(slotId: "top_speed", metricId: "controller_rpm").result)
+        let metricId = try XCTUnwrap(customized.metricId(for: "top_speed"))
+        XCTAssertEqual(HomeParameterReadout.read(metricId: metricId).title, "控制器 · 转速")
+        XCTAssertEqual(HomeParameterReadout.read(metricId: "app_gps_speed").title, "APP · GPS 速度")
+        XCTAssertFalse(DrivingSettings.defaults.showTextDescriptions)
+    }
+
 }

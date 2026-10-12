@@ -335,15 +335,14 @@ class RangeSourceContracts(unittest.TestCase):
         clear_body = balanced_block(self.service, "func clearWindow()")
         reset_body = balanced_block(self.service, "func reset()")
         evidence_key_body = balanced_block(self.service, "private func evidenceKey(_ id: UUID)")
-        capacity_key_body = balanced_block(self.service, "private func capacityKey(_ id: UUID)")
 
-        for field in ("version", "deviceID", "intervals"):
+        for field in ("version", "deviceID", "intervals", "capacityAh"):
             self.assertIn(f"let {field}:", stored_body)
         for forbidden in ("latitude", "longitude", "GpsFix", "coordinate"):
             self.assertNotIn(forbidden.lower(), stored_body.lower())
 
         self.assertIn("id.uuidString", evidence_key_body)
-        self.assertIn("id.uuidString", capacity_key_body)
+        self.assertNotIn("capacityKey", self.service)
         self.assertIn("let key = evidenceKey(deviceID)", persist_body)
         self.assertIn("deviceID: deviceID", persist_body)
         self.assertIn("stored.deviceID == id", restore_body)
@@ -353,9 +352,39 @@ class RangeSourceContracts(unittest.TestCase):
         self.assertIn("restoreWindow(for: id)", set_device_body)
         self.assertIn("window.clear()", clear_body)
         self.assertIn("persistWindow()", clear_body)
-        self.assertIn("defaults.removeObject(forKey: capacityKey(deviceID))", reset_body)
+        self.assertIn("stored.capacityAh", restore_body)
+        self.assertIn("evidenceCapacityAh = stored.capacityAh", restore_body)
         self.assertIn("clearWindow()", reset_body)
         self.assertNotIn("removePersistentDomain", self.service)
+
+    def test_capacity_is_derived_from_fresh_bms_and_not_manual_preferences(self) -> None:
+        refresh = balanced_block(self.service, "func refresh(now: Date? = nil)")
+        valid = balanced_block(self.service, "private func hasValidCapacity(_ value: BmsSnapshot)")
+        ingest = balanced_block(self.service, "func ingest(snapshot: BmsSnapshot)")
+        restart = balanced_block(self.service, "private func restartSampling(now: Date)")
+        self.assertNotIn("updateNominalCapacityAh", self.service)
+        self.assertIn("isUsable(snapshot, now: now)", refresh)
+        self.assertIn("nominalCapacityAh = snapshot.capacityAh", refresh)
+        self.assertIn("nominalCapacityAh = 0", refresh)
+        self.assertIn("nominalCapacityAh = 0", restart)
+        for check in ("value.capacityAh.isFinite", "value.capacityAh > 0",
+                      "value.capacityAh <= 10_000", "value.remainingAh <= value.capacityAh"):
+            self.assertIn(check, valid)
+        self.assertIn("evidenceCapacityAh != snapshot.capacityAh", ingest)
+        self.assertIn("discardDrivingEvidence()", ingest)
+        self.assertIn("evidenceCapacityAh = snapshot.capacityAh", ingest)
+        self.assertIn("android-driving-window-v2-bms-capacity", self.service)
+
+    def test_capacity_settings_are_read_only_and_clear_only_affects_window(self) -> None:
+        settings = read_source(ROOT / "Sources/Features/Settings/RangeSettingsView.swift")
+        results = read_source(ROOT / "Sources/Features/Range/RangeView.swift")
+        for removed in ("capacityText", "saveCapacity", "range.save.capacity", "range.reset.device"):
+            self.assertNotIn(removed, settings)
+        self.assertIn('accessibilityIdentifier("range.capacity.readout")', settings)
+        self.assertIn('accessibilityIdentifier("range.clear.window")', settings)
+        self.assertIn('LabeledContent("BMS 总容量"', settings)
+        self.assertIn('LabeledContent("BMS 总容量"', results)
+        self.assertNotIn("尚未设置", results)
 
     def test_persistence_and_exports_do_not_contain_coordinates(self) -> None:
         stored_body = balanced_block(self.service, "private struct StoredWindow")

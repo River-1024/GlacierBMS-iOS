@@ -14,7 +14,9 @@ final class RangeService: ObservableObject {
     /// 同一窗口 BMS 剩余 Ah 的前后差值；净 Ah 不为正时不显示 km/Ah。
     @Published private(set) var referenceKmPerAh: Double?
     @Published private(set) var accumulatedNetAh = 0.0
+    /// 当前新鲜 BMS 总容量；0 是内部不可用标记，UI 显示 --。
     @Published private(set) var nominalCapacityAh = 0.0
+    private var evidenceCapacityAh: Double?
     @Published private(set) var deviceID: UUID?
     @Published private(set) var accumulatedDistanceMeters = 0.0
     @Published private(set) var accumulatedNetWh = 0.0
@@ -44,7 +46,7 @@ final class RangeService: ObservableObject {
     private static let telemetryMaxAge: TimeInterval = 30
     private static let intervalMaxGap: TimeInterval = 10
     private var bmsPairMaxAge: TimeInterval = 3
-    private static let persistenceVersion = "android-driving-window-v1-seed-only"
+    private static let persistenceVersion = "android-driving-window-v2-bms-capacity"
     // 保留无硬件测试入口的既有默认值；生产 App 会应用 DrivingSettings (15min/10s)。
     @Published private(set) var windowAge: TimeInterval = 300
     @Published private(set) var predictionRefreshInterval: TimeInterval = 0
@@ -128,8 +130,8 @@ final class RangeService: ObservableObject {
         guard deviceID != id else { return }
         persistWindow()
         deviceID = id
-        nominalCapacityAh = id.map { defaults.double(forKey: capacityKey($0)) } ?? 0
-        if !nominalCapacityAh.isFinite || nominalCapacityAh < 0 { nominalCapacityAh = 0 }
+        nominalCapacityAh = 0
+        evidenceCapacityAh = nil
         window.clear()
         restartSampling(now: clock())
         lastPersistedAt = nil
@@ -140,22 +142,7 @@ final class RangeService: ObservableObject {
         refresh()
     }
 
-    @discardableResult
-    func updateNominalCapacityAh(_ value: Double) -> Bool {
-        guard let deviceID, value.isFinite, value > 0 else {
-            lastError = "请先绑定设备，并输入大于零的有限额定容量（Ah）"
-            return false
-        }
-        nominalCapacityAh = value
-        cachedWindow = nil
-        lastPredictionAt = nil
-        defaults.set(value, forKey: capacityKey(deviceID))
-        lastError = nil
-        refresh()
-        return true
-    }
-
-    /// 只忘记驾驶证据，保留容量/配置/行程/其他设备和已导出文件。
+    /// 只忘记驾驶证据，保留配置/行程/其他设备和已导出文件；等待新遥测。
     func clearWindow() {
         window.clear()
         evidenceDirty = true
@@ -167,8 +154,6 @@ final class RangeService: ObservableObject {
     }
 
     func reset() {
-        if let deviceID { defaults.removeObject(forKey: capacityKey(deviceID)) }
-        nominalCapacityAh = 0
         clearWindow()
     }
 
@@ -214,6 +199,14 @@ final class RangeService: ObservableObject {
             refresh(now: now)
             return
         }
+        if let evidenceCapacityAh, evidenceCapacityAh != snapshot.capacityAh {
+            // 同一 UUID 也可能更换电池或调整 BMS 容量，不能混用旧窗口。
+            discardDrivingEvidence()
+            previousEndpoint = nil
+            capacityBaseline = nil
+            latestFix = nil
+        }
+        evidenceCapacityAh = snapshot.capacityAh
         if let previous = capacityBaseline, hasCapacityJump(from: previous, to: snapshot) {
             discardDrivingEvidence()
             previousEndpoint = nil
@@ -288,6 +281,11 @@ final class RangeService: ObservableObject {
     func refresh(now: Date? = nil) {
         let now = now ?? clock()
         checkClock(now)
+        if connected, deviceID != nil, let snapshot = latestSnapshot, isUsable(snapshot, now: now) {
+            nominalCapacityAh = snapshot.capacityAh
+        } else {
+            nominalCapacityAh = 0
+        }
         updateWindowMetrics()
         if evidenceDirty, lastPersistedAt.map({ now.timeIntervalSince($0) >= 10 }) != false { persistWindow() }
         guard let deviceID, connected else {
@@ -301,6 +299,9 @@ final class RangeService: ObservableObject {
         }
         guard snapshot.statusCode != 5 else {
             stop(.noValidIntervals, "BMS 报告错误/保护状态，暂停续航估计"); return
+        }
+        guard hasValidCapacity(snapshot) else {
+            stop(.capacityInvalid, "BMS 总容量或剩余容量无效，等待有效遥测"); return
         }
         guard isUsable(snapshot, now: now) else { stop(.noValidIntervals, "BMS 电气样本无效"); return }
         guard nominalCapacityAh.isFinite, nominalCapacityAh > 0 else { stop(.capacityInvalid); return }
@@ -378,6 +379,7 @@ final class RangeService: ObservableObject {
     /// 普通缺口只断配对；显式清除、设备切换、Ah 跳变/时钟回退才清驾驶证据。
     private func restartSampling(now: Date) {
         notBefore = now
+        nominalCapacityAh = 0
         latestSnapshot = nil
         capacityBaseline = nil
         latestFix = nil
@@ -415,16 +417,20 @@ final class RangeService: ObservableObject {
         return delta > explained + current.capacityAh * 0.01
     }
 
-    private func capacityKey(_ id: UUID) -> String { "com.zjsf.anturide.range.capacity.\(id.uuidString)" }
     private func evidenceKey(_ id: UUID) -> String { "com.zjsf.anturide.range.driving.\(id.uuidString)" }
     private func isRecent(_ date: Date, maxAge: TimeInterval, now: Date) -> Bool {
         let age = now.timeIntervalSince(date)
         return age.isFinite && age >= 0 && age <= maxAge
     }
+    private func hasValidCapacity(_ value: BmsSnapshot) -> Bool {
+        value.capacityAh.isFinite && value.capacityAh > 0 && value.capacityAh <= 10_000
+            && value.remainingAh.isFinite && value.remainingAh >= 0 && value.remainingAh <= value.capacityAh
+    }
+
     private func isUsable(_ value: BmsSnapshot, now: Date) -> Bool {
         let power = value.totalVoltage * value.current
         guard isRecent(value.receivedAt, maxAge: Self.telemetryMaxAge, now: now),
-              value.isFreshCandidate, value.totalVoltage.isFinite, value.totalVoltage <= 300,
+              hasValidCapacity(value), value.isFreshCandidate, value.totalVoltage.isFinite, value.totalVoltage <= 300,
               value.current.isFinite, abs(value.current) <= 2_000,
               value.remainingAh.isFinite, value.remainingAh >= 0,
               power.isFinite, abs(power) <= 500_000, value.statusCode != 5 else { return false }
@@ -446,23 +452,25 @@ final class RangeService: ObservableObject {
     }
     private struct Endpoint { let fix: GpsFix; let bms: BmsSnapshot }
 
-    // 驾驶证据与容量偏好分开；不是电池校准，重连必须收到新的真实 BMS/GPS。
+    // 窗口容量元数据只用于恢复校验，不是实时容量/电池校准；重连仍需新 BMS/GPS。
     private struct StoredWindow: Codable {
         let version: String
         let deviceID: UUID
         let intervals: [RangeDrivingInterval]
+        let capacityAh: Double
     }
     private func persistWindow() {
         guard let deviceID else { return }
         let key = evidenceKey(deviceID)
-        guard !window.intervals.isEmpty else {
+        guard !window.intervals.isEmpty, let evidenceCapacityAh else {
             defaults.removeObject(forKey: key)
             lastPersistedAt = clock()
             evidenceDirty = false
             return
         }
         do {
-            let payload = StoredWindow(version: Self.persistenceVersion, deviceID: deviceID, intervals: window.intervals)
+            let payload = StoredWindow(version: Self.persistenceVersion, deviceID: deviceID,
+                                       intervals: window.intervals, capacityAh: evidenceCapacityAh)
             defaults.set(try JSONEncoder().encode(payload), forKey: key)
             lastPersistedAt = clock()
             evidenceDirty = false
@@ -475,7 +483,9 @@ final class RangeService: ObservableObject {
         guard let data = defaults.data(forKey: evidenceKey(id)), data.count <= 16_000_000,
               let stored = try? JSONDecoder().decode(StoredWindow.self, from: data),
               stored.version == Self.persistenceVersion, stored.deviceID == id,
+              stored.capacityAh.isFinite, stored.capacityAh > 0, stored.capacityAh <= 10_000,
               stored.intervals.count <= 36_000 else { return }
+        evidenceCapacityAh = stored.capacityAh
         let now = clock()
         for interval in stored.intervals where interval.endedAt <= now {
             _ = window.append(interval) // 领域入口重新校验数值、覆盖、重复、重叠和驾驶阈值。
@@ -500,7 +510,8 @@ final class RangeService: ObservableObject {
     }
     private struct Export: Encodable {
         let energyDataVersion = AndroidEnergyCurve.version
-        let schemaVersion = 3
+        let schemaVersion = 4
+        let capacitySource = "fresh BMS capacityAh; manual preferences ignored"
         let model = "Android effective-driving FIFO; built-in seed/legacy; learning disabled"
         let generatedAt: Date
         let deviceID: String?

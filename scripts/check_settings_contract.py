@@ -51,6 +51,23 @@ class SettingsSourceContracts(unittest.TestCase):
         self.assertNotIn("range.exportJSON()", settings)
         self.assertNotIn("range.exportCSV()", settings)
 
+    def test_home_has_only_slots_and_native_candidate_navigation(self):
+        editor = source("Sources/Features/Home/HomeParameterEditorView.swift")
+        dashboard = source("Sources/Features/Dashboard/DashboardView.swift")
+        model = source("Sources/Features/Home/HomeParameterModels.swift")
+        self.assertNotIn('Toggle(', editor)
+        self.assertNotIn('editMode', editor)
+        self.assertNotIn('旧版首页卡片', editor)
+        self.assertIn('HomeParameterCandidateView(session: $session, slotId: assignment.slotId)', editor)
+        self.assertIn('home.candidate.', editor)
+        self.assertIn('home.save', editor)
+        self.assertIn('home.cancel', editor)
+        self.assertNotIn('visibleCards', dashboard)
+        self.assertNotIn('parameterCard(', dashboard)
+        self.assertIn('loadForHome()', dashboard)
+        self.assertIn('decoded.forHome', model)
+        self.assertIn('if !decoded.usesSlotLayout { save(config) }', model)
+
     @unittest.skipUnless(ANDROID.is_file(), "Sibling Android checkout not available")
     def test_android_shared_defaults_match(self):
         swift = source("Sources/Domain/Settings/DrivingSettings.swift")
