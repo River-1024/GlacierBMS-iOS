@@ -628,3 +628,10 @@
 - 用户设备为 iOS 27。iOS 16 是当前项目最低兼容配置，不是用户提出的设备要求；本轮不调整 deployment target。
 - 按用户要求，新增 workflow_dispatch 的 build_only=true 模式，跳过 Python 合约、SwiftPM、XCTest/XCUITest 与模拟器诊断，只生成工程、Release 真机构建、包内容检查及 IPA 上传；默认完整验证流程不变。
 - 当前验证：git diff --check 通过；将提交当前源码 SHA 并显式触发仅编译 CI。编译/包检查不证明残影消失或不掉帧，交由用户 iOS 27 真机实测验收。
+
+### 步骤 045：前三 Tab 仅保留长按布局编辑（北京时间 2026-10-12 22:26:20 +08:00）
+
+- 用户确认布局拖动已实测完成。本轮不修改拖放实现或持久化规则。
+- ParameterCardPage 移除电池/控制器导航栏“编辑”和仪表盘卡片内“编辑布局”按钮；保留现有长按菜单，空状态改为长按入口并保留 VoiceOver 自定义操作。
+- HomeParameterEditingUITests 的共用编辑入口改为长按参数卡，并断言旧按钮不存在；完成、取消和保存等回归继续使用该入口。新增静态入口约束。
+- 本地验证：参数卡 15、仪表盘 6、设置 7、续航 13 项源码合约检查通过，共 41 项；git diff --check 通过。Windows 无 Swift/Xcode，本轮尚未编译或运行 XCUITest，未生成新 IPA，不能把此前拖动实测当作本轮按钮移除的真机验收。

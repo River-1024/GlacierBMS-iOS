@@ -286,8 +286,15 @@ final class HomeParameterEditingUITests: XCTestCase {
 
     private func openEditor(_ page: String = "dashboard") {
         showPage(page)
-        let edit = app.buttons["\(page).edit"]
-        scrollTo(edit, page: page)
+        XCTAssertFalse(app.buttons["\(page).edit"].exists)
+        scrollToTop(page)
+        let card = grid(page).cells.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND NOT identifier CONTAINS %@ AND NOT identifier CONTAINS %@", "\(page).parameter-content.item.", ".item.fixed.", ".item.toggle.")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        card.press(forDuration: 1.2)
+        let edit = app.buttons["编辑布局"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        let hittable = NSPredicate { _, _ in edit.exists && edit.isHittable }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 5), .completed)
         edit.tap()
         XCTAssertTrue(app.buttons["\(page).cancel"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["首页参数"].exists)

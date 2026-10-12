@@ -41,16 +41,6 @@ struct ParameterCardPage: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if store.isEditing { editorBar }
             }
-            .toolbar {
-                if store.page != .dashboard {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("编辑") { store.beginEditing() }
-                            .disabled(store.isEditing)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .accessibilityIdentifier("\(pageID).edit")
-                    }
-                }
-            }
             .sheet(item: $picker) { request in
                 ParameterMetricPicker(store: store, request: request, availableMetricIDs: availableMetricIDs)
             }
@@ -114,9 +104,16 @@ struct ParameterCardPage: View {
         case "fixed.empty":
             return AnyView(VStack(alignment: .leading, spacing: 8) {
                 Text("暂无显示参数").font(.headline)
-                Button("编辑布局") { store.beginEditing() }
-                    .frame(minWidth: 44, minHeight: 44).accessibilityIdentifier("\(pageID).edit")
-            }.padding())
+                Text("长按编辑布局").font(.subheadline).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding()
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("编辑布局") { store.beginEditing() }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAction(named: Text("编辑布局")) { store.beginEditing() }
+                .accessibilityIdentifier("\(pageID).empty-layout"))
         default: break
         }
         if let definition = definitions.first(where: { "toggle.\($0.id)" == id }) {
@@ -199,12 +196,6 @@ struct ParameterCardPage: View {
                 }.padding(.horizontal, 12)
             }
             card(placement)
-            if !store.isEditing && store.page == .dashboard && placement.id == firstMetricID {
-                Button { store.beginEditing() } label: {
-                    Label("编辑布局", systemImage: "rectangle.3.group").font(.subheadline)
-                        .frame(minWidth: 44, minHeight: 44)
-                }.padding(.horizontal, 12).accessibilityIdentifier("dashboard.edit")
-            }
         }
         .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contextMenu {

@@ -19,6 +19,20 @@ class ParameterCardSourceContracts(unittest.TestCase):
             self.assertNotIn("HomeParameterEditorView", text)
         self.assertFalse((ROOT / "Sources/Features/Home/HomeParameterEditorView.swift").exists())
 
+    def test_edit_entry_is_long_press_only_with_accessible_empty_state(self):
+        page = source("Sources/Features/Parameters/ParameterCardPage.swift")
+        self.assertNotIn('.toolbar {', page.split('private struct ParameterMetricPicker: View')[0])
+        self.assertNotIn('Button("编辑")', page)
+        self.assertNotIn('Label("编辑布局"', page)
+        self.assertNotIn('.edit")', page)
+        self.assertEqual(page.count('.contextMenu {'), 2)
+        self.assertEqual(page.count('.accessibilityAction(named: Text("编辑布局"))'), 2)
+        self.assertIn('Text("长按编辑布局")', page)
+        self.assertIn('.contentShape(Rectangle())', page)
+        tests = source("Tests/UITests/HomeParameterEditingUITests.swift")
+        self.assertIn('card.press(forDuration: 1.2)', tests)
+        self.assertIn('XCTAssertFalse(app.buttons["\\(page).edit"].exists)', tests)
+
     def test_display_edits_do_not_write_devices(self):
         texts = [source(f"Sources/Features/{name}/{name}View.swift") for name in ("Dashboard", "Battery", "Controller")]
         texts += [source("Sources/Features/Parameters/ParameterCardPage.swift"),
