@@ -252,8 +252,9 @@ final class HomeParameterEditingUITests: XCTestCase {
             ("controller", "controller_pending_bytes", "controller.diagnostics")
         ] {
             openEditor(page)
-            scrollTo(metric(lastMetric, page: page), page: page, attempts: 80)
-            XCTAssertTrue(metric(lastMetric, page: page).isHittable)
+            let lastCard = metricCell(lastMetric, page: page)
+            scrollTo(lastCard, page: page, attempts: 80)
+            XCTAssertTrue(lastCard.isHittable)
             let add = app.buttons["\(page).add.\(lastSection)"]
             scrollTo(add, page: page, attempts: 80)
             XCTAssertTrue(add.isHittable, "最后一行添加入口必须可达：\(page)")
@@ -267,6 +268,10 @@ final class HomeParameterEditingUITests: XCTestCase {
 
     private func metric(_ id: String, page: String = "dashboard") -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: "\(page).metric.\(id)").firstMatch
+    }
+
+    private func metricCell(_ id: String, page: String = "dashboard") -> XCUIElement {
+        grid(page).cells["\(page).parameter-content.item.\(id)"].firstMatch
     }
 
     private func grid(_ page: String) -> XCUIElement {
@@ -295,7 +300,9 @@ final class HomeParameterEditingUITests: XCTestCase {
         let actionID = actionIdentifier(for: title, page: page, metricID: metricID)
         let action = app.buttons[actionID]
         XCTAssertTrue(action.waitForExistence(timeout: 5), "未找到菜单动作：\(actionID)")
-        XCTAssertTrue(action.isHittable, "菜单动作不可点击：\(actionID)")
+        let hittable = NSPredicate { _, _ in action.exists && action.isHittable }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 5),
+                       .completed, "菜单动作不可点击：\(actionID)")
         action.tap()
     }
 
@@ -383,8 +390,8 @@ final class HomeParameterEditingUITests: XCTestCase {
         // becomes active; do not cache their resolved accessibility element type.
         var frames: (CGRect, CGRect)?
         let ordered = NSPredicate { _, _ in
-            let first = self.grid(page).buttons["\(page).actions.\(firstID)"]
-            let second = self.grid(page).buttons["\(page).actions.\(secondID)"]
+            let first = self.metricCell(firstID, page: page)
+            let second = self.metricCell(secondID, page: page)
             guard first.exists, second.exists else { return false }
             let a = first.frame, b = second.frame
             frames = (a, b)
