@@ -910,7 +910,7 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertEqual(service.effectiveDuration, 0)
             XCTAssertEqual(service.accumulatedNetWh, 0)
             XCTAssertNil(service.prediction?.predictedRangeKm)
-            service.ingest(fix: fix(clock.date))
+            service.ingest(fix: fix(clock.date, longitude: 0))
             clock.advance(1)
             service.ingest(snapshot: snapshot(clock.date))
             service.ingest(fix: fix(clock.date, longitude: 0.0002))
