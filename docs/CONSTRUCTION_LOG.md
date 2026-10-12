@@ -426,3 +426,63 @@
 - 证据 `run.json`、完整 `ci.log`、`artifact-verification.json` 与两个 IPA 均保存在被忽略的 `build/ci/01aec26/`、`build/ci/latest/`，不进入 Git。
 - 本地三个静态契约检查：蓝牙 10/10、设置 6/6、Dashboard 6/6；`git diff --check` 通过。此为 Windows 静态检查；Xcode 编译/测试证据来自上述 macOS CI。
 - 尚待真实 iPhone：签名安装、实际双 BLE 同时连接/独立断开/自动重连、权限和前后台行为、VoiceOver 与车辆数据核验。CI 通过和 unsigned IPA 生成不等于硬件验收。未修改 Android 父仓库。
+
+## 步骤 041：续航驾驶窗口算法对齐与签名外 IPA 交付（北京时间 2026-10-12 12:30:00 +08:00）
+
+### 范围边界
+
+用户确认的范围是：**核心驾驶窗口算法已对齐 Android，但不是包含学习、审计和所有显示行为的完整复刻。**
+
+保持不变的既有行为：最终公式仍为「剩余可用 Wh ÷ 窗口净 Wh/km」；继续使用 Android seed/legacy 固定能量曲线；额定容量仍由现有设置方式管理；仍不新增电池学习，也不恢复 Android 校准数据。
+
+### 已对齐的 8 项
+
+| 项目 | 对齐后的实现 |
+|---|---|
+| 有效驾驶判定 | 区间位移 ÷ 区间时长，平均速度 ≥ 3 km/h；不用瞬时 GPS 速度判定 |
+| 预测最低门槛 | 同时满足 30 秒、200 米、5 Wh 放电、5 Wh 净能耗 |
+| 窗口维护 | 按**累计有效驾驶时长** FIFO；停车与时间流逝不挤出旧驾驶证据 |
+| 再生扣除 | `净 Wh = 放电 Wh − 移动再生 Wh` |
+| 功率积分 | 使用 `电压 × 电流`，跨零时分别积分放电与再生 |
+| 部分区间裁剪 | 距离与测量 Ah 按时间比例裁剪，功率插值后重新积分 |
+| 刷新周期 | 缓存驾驶窗口；剩余 Ah/Wh 取最新 BMS；展示 Wh/km 与预测使用同一批窗口 |
+| 数据恢复 | 按设备 UUID 本机恢复驾驶证据；不恢复旧实时采样端点，不保存坐标 |
+
+核心代码：`Sources/Domain/Range/RangeDrivingWindow.swift`（窗口与积分）、`Sources/Services/RangeService.swift`（采样、配对与恢复）。
+
+### 新增异常处理
+
+- 容量异常跳变：超过「平均绝对电流可解释 Ah + BMS 容量的 1%」时清理驾驶窗口。
+- 系统时钟、BMS/GPS 样本时间回退：清理旧时间基准，避免连接跨回退区间。
+- 过大缺口、坏电气数据、功率符号冲突、坏 GPS 区间：只排除对应区间，**普通坏区间不清空其他有效历史**。
+- 重复、重叠区间不重复累计；修复容量跳变后旧「停车充电」标记可能残留的问题。
+- 复核阶段统一了 Android 的距离计算常量，并修复续航静态检查脚本在独立 iOS CI 无父项目源码时无法运行的问题（改为回退 pinned 基线）。
+
+### 仍保留的差异
+
+除上述明确保留项外：Android 在部分过期/断连状态下保留旧预测数值并标记暂停，iOS 仍撤下预测并显示不可用状态；iOS 保留现有更严格的数据有效性检查；Android 的完整原始区间审计、排除原因记录及回放体系没有整体移植。这些差异本轮未扩展。
+
+### CI 迭代与最终结果
+
+4 轮 `workflow_dispatch` 迭代（工作流 `push` 触发只覆盖 `main`，特性分支必须手动派发）：
+
+| Run | 提交 | 结论 | 失败点与修复 |
+|---|---|---|---|
+| 38200256694 | `b617a78` | 失败 | `RangeServiceTests:913` 漏传 `longitude`（编译错误）；补参为 `5bc519e` |
+| 38200692584 | `5bc519e` | 失败 | `testNetAh` 步长笔误致位移超 2 km 上限、区间全拒；`testColdRestoration` 缺断连 flush 前置；修复为 `c7004b1` |
+| 38201483521 | `c7004b1` | 失败 | 单元测试全过；界面开关 `bluetooth.battery.filter` 偶发丢 tap；条件重试加固为 `60101a4` |
+| 38202579046 | `60101a4` | 成功 | 14 个具名步骤全部成功，作业 04:08:42 → 04:17:35 UTC（8m53s） |
+
+- 三项修复均未改动实现代码。`Tests/AppTests` 不参与 `swift test`，其编译与语义错误只能在 `xcodebuild` 真执行时暴露，前两轮失败属测试夹具问题；第三轮以同一 App 二进制的两次运行对照（UI 套件 193 s，首点坐标与通过运行时一致）判定为时序不稳，加固仍保留「两次点击后依然失败」的真实故障检出能力。
+- 测试基线（Run `38202579046`）：SwiftPM 161、iOS XCTest 364、XCUITest 12，全部零失败；四项源码契约 33 例通过（设置 6，其中 2 例 Android 对照在独立 checkout 显式跳过；Dashboard 6；蓝牙 10；续航 11）。
+- 回归覆盖：`RangeDrivingWindowTests` 24 例（窗口与积分）、`RangeServiceTests` 41 例（服务、配对、持久化与恢复）。
+
+### 交付产物
+
+- 构建源码提交 `60101a4d826418fec9879ca33400e13130208c13`（`60101a4`），已推送 `codex/ios-parity-20261010`。
+- IPA：`build/ci/60101a4/ANTuRide-unsigned.ipa`，2276667 字节，SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`；`build/ci/latest/` 已同步为同字节副本。
+- 核验：13 个 ZIP 条目、CRC 全通过；主二进制 4531352 字节，含 `RangeDrivingWindow` / `RangeElectricalSpan` / `RangeDrivingInterval` / `RangeService` 符号；`Assets.car` 946264、`PrivacyInfo.xcprivacy` 397、`ANTuRideDomain.framework/ANTuRideDomain` 927568 字节。
+- 标识：`com.zjsf.anturide`、显示名「安途」、版本 0.1.0 (1)、`CFBundleIconName = AppIcon`、`MinimumOSVersion = 16.0`、`UIBackgroundModes = [location]`；无 `embedded.mobileprovision`、无 `_CodeSignature`、主二进制 47 条加载命令中无 `LC_CODE_SIGNATURE`，确认为 unsigned，须个人签名后安装。
+- 证据 `run.json`、`ci.log`（878676 字节）、`artifact-verification.json` 与 IPA 均保存在被忽略的 `build/ci/60101a4/`、`build/ci/latest/`，不进入 Git；`latest/` 的四个文件已统一指向 Run `38202579046`，不再混用上一批 `01aec26` 的元数据。
+- 本地静态检查：四项契约 33/33（续航 11/11）与 `git diff --check` 通过，均为 Windows 静态结果；编译与测试证据来自上述 macOS CI。
+- 尚待真实 iPhone + BLE + 车辆：真实 GPS 漂移、断连重连、后台锁屏、容量跳变下的窗口表现，以及 VoiceOver/大字号显示。CI 通过和 unsigned IPA 不代表硬件验收。

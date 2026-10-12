@@ -21,7 +21,7 @@
 | GPS 权限、速度、里程 | `location/LocationHelper.kt`、`MainActivity.kt` | `Services/LocationService.swift`、`Domain/Trip/` | 部分/未验证 | 完成 G2 后台/锁屏/文件验收 |
 | 行程列表/详情/分段 | `ui/TripDetailsLayout.kt`、`TripTimeEnergyReview.kt` | `Features/Trips/TripHistoryView.swift` | 部分 | 已新增逐点证据及四指标曲线；地图回放、缩放选点仍缺 |
 | 行程能耗、Wh/km 时间窗口、样本分页 | `TripEnergyReview.kt`、相关 Trip 模型 | TripSample + 1/3/5/10 分钟窗口摘要 | 部分/CI通过 | 共同覆盖分母/暂停缺口已测试；分页/完整安卓图表仍待 |
-| 综合续航预测 | `model/BatteryEnergyCalibration.kt`、RangeAnalysis*、`RangeStatusText.kt` | RangeService + 安卓 seed/legacy 曲线 | 部分/批次CI通过 | 8315235已编译；可配置窗口/完整安卓分析包仍待 |
+| 综合续航预测 | `model/BatteryEnergyCalibration.kt`、RangeAnalysis*、`RangeStatusText.kt` | RangeService + RangeDrivingWindow + 安卓 seed/legacy 曲线 | 部分/CI通过（窗口算法已对齐） | `60101a4` 起有效驾驶判定/FIFO 窗口/门槛/再生扣除/区间裁剪已对齐；可配置窗口与完整安卓分析、审计包仍待，过期断连显示策略保留差异 |
 | 电池学习/历史修订/学习恢复 | `BatteryEnergyCalibration.kt`、`BatteryCalibrationChart.kt` | AndroidEnergyCurve 只读数据 | 按用户决定取消 | 不做iOS学习，复用安卓内置数据；不声称手机私有学习数据库已导入 |
 | CSV/JSON 行程/控制器导出 | `ControllerRecordExporter.kt`、主界面导出入口 | iOS 行程详情仅 JSON 临时分享 | 部分 | 增加 CSV、长期可访问导出与核验 |
 | 本地删除/重置 | Android 设置与数据入口 | iOS 行程删除；无完整重置 | 部分 | 明确分级删除：行程、校准、日志、全部数据 |
@@ -152,3 +152,12 @@
 - 上文“未提交、未运行 Xcode/未生成 IPA”保留为前期历史：设置与 Dashboard 本批源码 `414d8b0` 已发布，Run `38119495743` 全部成功（130 SwiftPM / 280 App XCTest / 9 XCUITest）。IPA 已下载校验，latest 已同步；准确版本和哈希见施工步骤 039。
 - 首页保留指标和布局偏好，按 iOS 原生交互删除顶栏/固定辅助卡，行程控制移动至行程 Tab、图表迁移系统 Swift Charts；不追求 Android 顶部布局像素级一致。
 - 真实设备/BMS/车辆验收与既有平台/算法差异继续保留，未扩展 RPM-only 或宣称 Android 全面对等。
+
+
+### 续航驾驶窗口算法对齐（北京时间 2026-10-12 12:30:00 +08:00）
+
+- 用户确认范围：**核心驾驶窗口算法已对齐 Android，但不是包含学习、审计和所有显示行为的完整复刻**；上方功能矩阵「综合续航预测」行的状态据此更新为「部分/CI通过（窗口算法已对齐）」。
+- 已对齐：有效驾驶判定（区间位移÷时长 ≥ 3 km/h，不用瞬时 GPS 速度）、预测门槛（30 秒/200 米/5 Wh 放电/5 Wh 净能耗同时满足）、窗口按累计有效驾驶时长 FIFO、净 Wh = 放电 − 移动再生、`电压 × 电流` 跨零分别积分、部分区间按时间比例裁剪后重积分、窗口缓存配合最新 BMS 剩余量、按设备 UUID 恢复证据且不保存坐标。
+- 有意保留的差异：过期/断连时 iOS 撤下预测并显示不可用，Android 保留旧数值并标记暂停；iOS 保留更严格的数据有效性检查；Android 原始区间审计、排除原因记录与回放体系未移植；仍不学习、不恢复 Android 校准数据，沿用 seed/legacy 曲线与现有容量设置。
+- 验证：Run `38202579046`（`60101a4`）全部步骤成功，SwiftPM 161 / iOS XCTest 364 / XCUITest 12 零失败，续航源码契约 11 例通过；unsigned IPA 2276667 字节已核验，详见 `docs/CI_BUILD_RESULTS.md` 与 `docs/CONSTRUCTION_LOG.md` 步骤 041。
+- 真机续航窗口验收仍待 iPhone + BMS + 车辆：真实 GPS 漂移、断连重连、后台锁屏与容量跳变场景不能用 CI/模拟器替代。

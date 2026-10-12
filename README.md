@@ -92,3 +92,13 @@ build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
 - IPA：`build/ci/01aec26/ANTuRide-unsigned.ipa`；`build/ci/latest/ANTuRide-unsigned.ipa` 为校验后副本。2,247,761 字节，SHA-256 `95476b8eb519d0984732383d2d70ed8d5836ada32eca6058a6a5169d24d5943c`。
 - IPA 未签名、无 provisioning profile，须用个人 Apple 开发者签名后安装。模拟器和 CI 不代表真实 iPhone 双设备 BLE、独立断开/重连或车辆验收通过。
 - 详细实施、失败修复及证据见 `docs/CONSTRUCTION_LOG.md` 步骤 040、`docs/CI_BUILD_RESULTS.md` §10 和 `docs/BATTERY_CONTROLLER_SEPARATION.md`。后续文档提交不改变已构建源码，也不声称重新构建。
+
+## 续航驾驶窗口对齐与最新 IPA（北京时间 2026-10-12 12:30:00 +08:00）
+
+本节更新并取代上面的旧 IPA 批次状态（导航与设置入口未变）。续航的**有效驾驶窗口算法已对齐 Android**：有效驾驶判定改为区间位移÷区间时长的平均速度（≥3 km/h，不用瞬时 GPS 速度）；预测门槛要求 30 秒/200 米/5 Wh 放电/5 Wh 净能耗同时满足；窗口按**累计有效驾驶时长** FIFO（停车与时间流逝不挤出旧驾驶证据）；净 Wh = 放电 Wh − 移动再生 Wh（电压×电流跨零分别积分）；部分区间按时间比例裁剪后重新积分；按设备 UUID 本机恢复驾驶证据且不保存坐标。仍不学习电池、不恢复 Android 校准数据、沿用 Android seed/legacy 曲线与现有容量设置；过期/断连时 iOS 仍撤下预测显示不可用（Android 保留旧值并标记暂停），iOS 保留更严格的数据有效性检查。这**不是**包含学习、审计和所有显示行为的完整复刻。
+
+- 源码已推送到 `codex/ios-parity-20261010`，构建源码提交 `60101a4d826418fec9879ca33400e13130208c13`（`60101a4`）。
+- GitHub Actions Run `38202579046` 对应 SHA 完全一致且成功，14 个具名步骤全部通过（作业 8m53s）；SwiftPM 161 项、iOS 测试 364 项、XCUITest 12 项零失败；四项源码契约 33 例通过。
+- IPA：`build/ci/60101a4/ANTuRide-unsigned.ipa`；`build/ci/latest/` 已同步。2276667 字节，SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`。
+- 原始包 unsigned、无 provisioning profile，须用个人 Apple 开发者签名后安装。模拟器与 CI 不代表真实 iPhone 续航窗口、GPS 漂移、断连重连或车辆验收通过。
+- 完整范围、异常处理、仍保留差异与 4 轮 CI 迭代见 `docs/CONSTRUCTION_LOG.md` 步骤 041、`docs/CI_BUILD_RESULTS.md` 和 `docs/IOS_ANDROID_PARITY_AUDIT.md`。后续文档提交不改变已构建源码，也不声称重新构建。

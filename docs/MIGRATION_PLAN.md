@@ -596,3 +596,15 @@ Dashboard 减项、行程 Tab 归位、根页隐藏导航栏与 Swift Charts 迁
 方案已实现并通过 macOS CI，不再是待施工项。源码 `01aec26` 已推送；Run `38147063235` 精确 SHA 成功，SwiftPM 137、iOS 测试 327、UI 测试 12 均零失败，unsigned IPA 已下载校验。产品行为与设备端验收清单见 `docs/BATTERY_CONTROLLER_SEPARATION.md`；IPA/日志/Run 证据见 `build/ci/01aec26/`。
 
 未完成项仅为需要真实 iPhone/BLE/车辆的验收；未签名 IPA 必须先用个人证书签名。文档提交不改变已构建源码，也不意味着对文档版本重新构建。
+
+## 续航驾驶窗口算法对齐与 IPA 交付（北京时间 2026-10-12 12:30:00 +08:00）
+
+**范围：核心驾驶窗口算法已对齐 Android，但不是包含学习、审计和所有显示行为的完整复刻。** 保持不变的既有行为：最终公式「剩余可用 Wh ÷ 窗口净 Wh/km」、固定 Android seed/legacy 能量曲线、现有额定容量设置方式、不新增电池学习且不恢复 Android 校准数据。
+
+已对齐 8 项（有效驾驶判定、预测门槛 30 s/200 m/5 Wh 放电/5 Wh 净能耗、按累计有效驾驶时长的 FIFO 窗口、净 Wh = 放电 − 移动再生、电压×电流跨零分别积分、部分区间按时间比例裁剪后重积分、窗口缓存配合最新 BMS 剩余量、按 UUID 恢复证据且不存坐标）与新增异常处理（容量跳变、时钟/样本回退、坏区间只排除不清空、重复重叠不累计）见 `docs/CONSTRUCTION_LOG.md` 步骤 041；核心代码 `Sources/Domain/Range/RangeDrivingWindow.swift`、`Sources/Services/RangeService.swift`。
+
+仍保留的差异：过期/断连时 iOS 撤下预测（Android 保留旧数值并标记暂停）；iOS 保留更严格的数据有效性检查；Android 原始区间审计、排除原因记录与回放体系未移植。
+
+源码 `60101a4d826418fec9879ca33400e13130208c13`（`60101a4`）已推送 `codex/ios-parity-20261010`；Run `38202579046` 精确 SHA 成功，14 个具名步骤全部通过，SwiftPM 161、iOS XCTest 364、XCUITest 12 全部零失败，四项源码契约 33 例通过。unsigned IPA 2276667 字节、SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`，已归档 `build/ci/60101a4/` 并由 `build/ci/latest/` 同步（四份文件同指该 Run）。4 轮 CI 迭代的失败定位与修复见 `docs/CI_BUILD_RESULTS.md` 第 1、4 节。
+
+未完成项仍是需要真实 iPhone + BLE + 车辆的验收（真实 GPS 漂移、断连重连、后台锁屏、容量跳变、VoiceOver/大字号）；未签名 IPA 必须先用个人证书签名。文档提交不改变已构建源码，也不意味着对文档版本重新构建。

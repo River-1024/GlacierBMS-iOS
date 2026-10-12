@@ -1,6 +1,6 @@
 # ANTuRide iOS GitHub 构建结果记录
 
-> 记录时间：2026-10-10 12:15（北京时间，最近一次更新）
+> 记录时间：2026-10-12 12:30（北京时间，最近一次更新）
 > 仓库：`https://github.com/River-1024/GlacierBMS-iOS`（私有）
 > 工作流：`.github/workflows/build.yml`
 > 说明：本机（Windows）无 Swift/Xcode，iOS 编译与测试全部在 GitHub-hosted macOS runner 上执行。
@@ -8,7 +8,9 @@
 
 ## 1. 结论
 
-**最近一次更新（2026-10-10 12:15）：** 新增本地取包脚本 `scripts/fetch-ipa.sh`（详见第 7.1 节），构建产物从此按提交号归档到 `build/ci/<短SHA>/`，并由 `build/ci/latest/` 指向最近一次成功。
+**最近一次更新（2026-10-12 12:30）：** 续航驾驶窗口算法对齐 Android（effective-driving FIFO）经 4 轮 CI 迭代后全绿：Run `38202579046`（提交 `60101a4`，`workflow_dispatch`）14 个具名步骤全部成功（作业 04:08:42 → 04:17:35 UTC，8m53s），产物 2276667 字节，已归档 `build/ci/60101a4/`。测试基线：SwiftPM 161、iOS XCTest 364、XCUITest 12，全部零失败；四项源码契约 33 例通过（设置 6（含 2 例 Android 对照显式跳过）、Dashboard 6、蓝牙 10、续航 11）。迭代修复：① 编译级漏参（`RangeServiceTests:913` 缺 `longitude`，`Tests/AppTests` 不参与 `swift test`，静态检查无法发现）；② 测试语义与实现不符（`testNetAh` 步长笔误致区间全拒、`testColdRestoration` 缺断连 flush 前置）；③ UI 测试时序不稳（`bluetooth.battery.filter` 高负载偶发丢 tap，条件重试加固）。
+
+**上一轮（2026-10-10 12:15）：** 新增本地取包脚本 `scripts/fetch-ipa.sh`（详见第 7.1 节），构建产物从此按提交号归档到 `build/ci/<短SHA>/`，并由 `build/ci/latest/` 指向最近一次成功。
 
 **上一轮（2026-10-10 12:10）：** 新增日志系统（`Sources/Services/Logging/` 7 文件）与设置页日志管理 UI 后，运行 `38022252771`（提交 `4ab1c9b`）在 Xcode 26.3 / iOS 26.2 SDK 上全绿（10m4s），全部 12 个步骤成功，产物 1292490 字节。随后 `b32508a`（文档提交）连带运行 `38022973698` 同样全绿，产物同尺寸。
 
@@ -40,6 +42,10 @@
 
 | Run ID | 提交 | 结论 | 说明 |
 |---|---|---|---|
+| 38202579046 | `60101a4` | 成功 | 续航驾驶窗口对齐全量验证；SwiftPM 161、iOS XCTest 364、XCUITest 12 零失败；产物 2276667 字节，归档 `build/ci/60101a4/` |
+| 38201483521 | `c7004b1` | 失败 | 单元测试全过；UI 用例 `bluetooth.battery.filter` 偶发丢 tap（同二进制对照证实时序不稳） |
+| 38200692584 | `5bc519e` | 失败 | 新增回归测试首次真实执行：`testNetAh` 步长笔误、`testColdRestoration` 缺断连前置 |
+| 38200256694 | `b617a78` | 失败 | `RangeServiceTests:913` 漏传 `longitude`（编译错误；`Tests/AppTests` 首次由 xcodebuild 编译暴露） |
 | 38034738345 | `26e86f8` | 成功 | 阶段 2 G2 全量验证（定位/会话/持久化/仪表盘行程控制）；模拟器 39 例 0 失败；产物 1371090 字节，归档 `build/ci/26e86f8/` |
 | 38034546734 | `cd9d89b` | 失败 | `UIApplication.protectedData*Notification` 无 Swift 成员（改自建 NSNotification.Name）；`skidHiddenFiles` 误拼 |
 | 38034293526 | `953c52b` | 失败 | `TripStore` internal 被 public init 默认参数引用（可见性冲突，错误台账第 2 类坑复发） |
@@ -98,6 +104,7 @@
 
 | 产物名 | 来源运行 | 大小 | 保留 | 状态 |
 |---|---|---|---|---|
+| `ANTuRide-unsigned-ipa` | `38202579046`（`60101a4`） | 2276667 字节 | 7 天 | 已取回本地 `build/ci/60101a4/`（当前 latest） |
 | `ANTuRide-unsigned-ipa` | `38022973698`（`b32508a`） | 1292490 字节 | 7 天 | 已取回本地 `build/ci/b32508a/` |
 | `ANTuRide-unsigned-ipa` | `38022252771`（`4ab1c9b`） | 1292490 字节 | 7 天 | 未过期 |
 | `ANTuRide-unsigned-ipa` | `37961690423`（`2e77a27`） | 1174236 字节 | 7 天 | 已过期 |
@@ -105,7 +112,20 @@
 
 产物为 `ANTuRide.ipa`（内部 `Payload/ANTuRide.app`），已包含阶段 1 界面、液态玻璃样式、App 图标与隐私清单；工作流断言不含 `embedded.mobileprovision`。体积变化：阶段 0 为 75224 字节，阶段 1 为 196412 字节（+UI 与样式），资源修复后为 1174236 字节（+`Assets.car` 946264 字节、图标 PNG 与 `PrivacyInfo.xcprivacy`）。
 
-产物内容（运行 `37961690423`，本机下载后核验）：
+最新产物内容（运行 `38202579046` / `60101a4`，本机下载后核验）：
+
+| 条目 | 大小 |
+|---|---|
+| `ANTuRide.app/ANTuRide` | 4531352 字节 |
+| `ANTuRide.app/Assets.car` | 946264 字节 |
+| `ANTuRide.app/AppIcon60x60@2x.png` | 19248 字节 |
+| `ANTuRide.app/PrivacyInfo.xcprivacy` | 397 字节 |
+| `ANTuRide.app/Info.plist` | 1398 字节 |
+| `ANTuRide.app/Frameworks/ANTuRideDomain.framework/ANTuRideDomain` | 927568 字节 |
+
+标识 `com.zjsf.anturide`、显示名「安途」、`CFBundleIconName = AppIcon`、`MinimumOSVersion = 16.0`；主二进制含 `RangeDrivingWindow` / `RangeElectricalSpan` / `RangeDrivingInterval` / `RangeService` 符号（本轮驾驶窗口改动已入包）；无 `embedded.mobileprovision`。SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`（仅核对本次下载完整性）。
+
+上一批产物内容（运行 `37961690423`，本机下载后核验）：
 
 | 条目 | 大小 |
 |---|---|
