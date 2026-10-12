@@ -47,6 +47,9 @@ jobs:
       - name: Check Bluetooth separation source contracts
         run: python3 scripts/check_bluetooth_contract.py
 
+      - name: Check range source contracts
+        run: python3 scripts/check_range_contract.py
+
       - name: Run Swift package tests
         run: swift test
 
