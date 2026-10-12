@@ -342,26 +342,42 @@ final class DrivingSettingsStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testConfiguredRangeThrottlesPredictionButDoesNotThrottleSafety() throws {
+    func testConfiguredRangeCachesWindowNotPredictionAndSafetyBypassesCadence() throws {
         try withRange { service, clock in
-            var config = DrivingSettings()
+            var config = DrivingSettings.defaults
             config.rangeRefreshSeconds = 10
             service.applyDrivingSettings(config)
             seed(service, clock)
             let first = try XCTUnwrap(service.prediction?.predictedRangeKm)
-            for second in 2...10 {
+            XCTAssertEqual(service.effectiveDuration, 30)
+
+            for second in 31...39 {
                 clock.date = clock.start.addingTimeInterval(Double(second))
-                service.ingest(snapshot: snapshot(clock.date, power: 2000))
+                service.ingest(snapshot: snapshot(clock.date, power: 3_000, current: 45))
                 service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.0002))
             }
-            XCTAssertEqual(service.prediction?.predictedRangeKm, first)
-            clock.date = clock.start.addingTimeInterval(11)
-            service.ingest(snapshot: snapshot(clock.date, power: 2000))
-            service.ingest(fix: fix(clock.date, longitude: 0.0022))
-            XCTAssertLessThan(try XCTUnwrap(service.prediction?.predictedRangeKm), first)
-            // 刷新间隔尚未到期，充电必须立即撤下预测。
-            clock.date = clock.start.addingTimeInterval(12)
-            service.ingest(snapshot: snapshot(clock.date, power: -100))
+            XCTAssertEqual(service.prediction?.predictedRangeKm, first) // Window refresh not due.
+            XCTAssertEqual(service.effectiveDuration, 39) // Metrics still advance every GPS endpoint.
+
+            clock.date = clock.start.addingTimeInterval(40)
+            service.ingest(snapshot: snapshot(clock.date, power: 3_000, current: 45))
+            service.ingest(fix: fix(clock.date, longitude: 0.008))
+            let refreshed = try XCTUnwrap(service.prediction?.predictedRangeKm)
+            XCTAssertLessThan(refreshed, first)
+
+            // Current remaining Ah is live even while the Wh/km window remains cached.
+            clock.date = clock.start.addingTimeInterval(41)
+            service.ingest(snapshot: snapshot(clock.date, power: 3_000, current: 45, remainingAh: 49.5))
+            XCTAssertLessThan(try XCTUnwrap(service.prediction?.predictedRangeKm), refreshed)
+
+            // Charging needs stationary GPS evidence; a negative BMS callback alone is not enough.
+            clock.date = clock.start.addingTimeInterval(42)
+            service.ingest(snapshot: snapshot(clock.date, power: -990, current: -15, remainingAh: 49.5))
+            XCTAssertNotEqual(service.status, .charging)
+            service.ingest(fix: fix(clock.date, longitude: 0.008, speed: 0))
+            clock.date = clock.start.addingTimeInterval(43)
+            service.ingest(snapshot: snapshot(clock.date, power: -990, current: -15, remainingAh: 49.5))
+            service.ingest(fix: fix(clock.date, longitude: 0.008, speed: 0))
             XCTAssertEqual(service.status, .charging)
             XCTAssertNil(service.prediction?.predictedRangeKm)
         }
@@ -372,7 +388,7 @@ final class DrivingSettingsStoreTests: XCTestCase {
         try withRange { service, clock in
             service.applyDrivingSettings(.defaults)
             seed(service, clock)
-            for second in 2...420 {
+            for second in 31...420 {
                 clock.date = clock.start.addingTimeInterval(Double(second))
                 service.ingest(snapshot: snapshot(clock.date))
                 service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.0002))
@@ -382,11 +398,12 @@ final class DrivingSettingsStoreTests: XCTestCase {
             config.rangeWindowMinutes = 3
             service.applyDrivingSettings(config)
             XCTAssertEqual(service.windowAge, 180)
-            XCTAssertEqual(service.validIntervalCount, 181) // 下界端点包含。
-            clock.date = clock.date.addingTimeInterval(6)
+            XCTAssertEqual(service.validIntervalCount, 180) // Exactly 180 effective seconds.
+            clock.date = clock.date.addingTimeInterval(31)
             service.refresh()
             XCTAssertEqual(service.status, .telemetryStale)
-            XCTAssertEqual(service.validIntervalCount, 0)
+            XCTAssertEqual(service.validIntervalCount, 180) // Stale live state does not erase FIFO evidence.
+            XCTAssertEqual(service.effectiveDuration, 180)
             XCTAssertNil(service.prediction?.predictedRangeKm)
         }
     }
@@ -421,18 +438,23 @@ final class DrivingSettingsStoreTests: XCTestCase {
     private func seed(_ service: RangeService, _ clock: Clock) {
         service.ingest(snapshot: snapshot(clock.date))
         service.ingest(fix: fix(clock.date, longitude: 0))
-        clock.date = clock.start.addingTimeInterval(1)
-        service.ingest(snapshot: snapshot(clock.date))
-        service.ingest(fix: fix(clock.date, longitude: 0.0002))
+        for second in 1...30 {
+            clock.date = clock.start.addingTimeInterval(Double(second))
+            service.ingest(snapshot: snapshot(clock.date))
+            service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.0002))
+        }
+        // Deliberately invalidate the cache after the final GPS endpoint for the valid fixture.
+        XCTAssertTrue(service.updateNominalCapacityAh(100))
     }
 
-    private func snapshot(_ date: Date, power: Double = 1000) -> BmsSnapshot {
-        BmsSnapshot(receivedAt: date, totalVoltage: 66, current: power < 0 ? -15 : 15, soc: 50,
-                    capacityAh: 100, remainingAh: 50, temperatures: [], mosTemperature: 0,
+    private func snapshot(_ date: Date, power: Double = 1000, current: Double? = nil,
+                          remainingAh: Double = 50) -> BmsSnapshot {
+        BmsSnapshot(receivedAt: date, totalVoltage: 66, current: current ?? (power < 0 ? -15 : 15), soc: 50,
+                    capacityAh: 100, remainingAh: remainingAh, temperatures: [], mosTemperature: 0,
                     balancerTemperature: 0, cellVoltagesMillivolts: [3300], power: power,
                     statusCode: power < 0 ? 2 : 3, frameLength: 32)
     }
-    private func fix(_ date: Date, longitude: Double) -> GpsFix {
-        GpsFix(timestamp: date, latitude: 0, longitude: longitude, speed: 22, horizontalAccuracy: 5)
+    private func fix(_ date: Date, longitude: Double, speed: Double = 22) -> GpsFix {
+        GpsFix(timestamp: date, latitude: 0, longitude: longitude, speed: speed, horizontalAccuracy: 5)
     }
 }

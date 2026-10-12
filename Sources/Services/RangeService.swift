@@ -2,24 +2,25 @@ import ANTuRideDomain
 import Combine
 import Foundation
 
-/// 有效行驶窗口 + 安卓固定能量曲线门面；按产品决定不实现学习/校准。
-/// 主线程创建 `RangeService(bms:location:)`，并在连接目标确定时调用
-/// `setDeviceID(_:)`（外设 UUID，不是名称）。未提供可靠身份/定位流时明确停算。
+/// Android 有效驾驶窗口语义 + 固定 seed/legacy 能量曲线；不学习、不恢复校准数据。
+/// 窗口按外设 UUID 本机保存，不保存 GPS 坐标，不上传。
 @MainActor
 final class RangeService: ObservableObject {
     @Published private(set) var prediction: RangePrediction?
     @Published private(set) var status: RangePredictionStatus = .disconnected
     @Published private(set) var reasonText = "尚未绑定稳定设备 ID，无法安全接入实时续航"
     @Published private(set) var effectiveWhPerKm: Double?
-    /// 同一有效窗口的位移 / 区间时长，不读取 GPS 瞬时速度或总行程。
     @Published private(set) var averageSpeedKmh: Double?
-    /// 同一有效窗口的 km / 真实放电电流积分 Ah；零 Ah 时无参考值。
+    /// 同一窗口 BMS 剩余 Ah 的前后差值；净 Ah 不为正时不显示 km/Ah。
     @Published private(set) var referenceKmPerAh: Double?
     @Published private(set) var accumulatedNetAh = 0.0
-    @Published private(set) var nominalCapacityAh = 0.0 // 0 表示尚未设置，不是默认电池容量。
+    @Published private(set) var nominalCapacityAh = 0.0
     @Published private(set) var deviceID: UUID?
     @Published private(set) var accumulatedDistanceMeters = 0.0
     @Published private(set) var accumulatedNetWh = 0.0
+    @Published private(set) var accumulatedDischargeWh = 0.0
+    @Published private(set) var accumulatedRegenerationWh = 0.0
+    @Published private(set) var effectiveDuration: TimeInterval = 0
     @Published private(set) var validIntervalCount = 0
     @Published private(set) var lastError: String?
     @Published private(set) var lastExportURL: URL?
@@ -28,31 +29,37 @@ final class RangeService: ObservableObject {
     private let clock: () -> Date
     private let exportDirectory: URL
     private var subscriptions = Set<AnyCancellable>()
-    private var bmsService: BmsBluetoothService?
-    private var locationService: LocationService?
     private var connected = false
     private var locationUpdating = false
     private var notBefore: Date
+    private var lastClockAt: Date
     private var latestSnapshot: BmsSnapshot?
+    private var capacityBaseline: BmsSnapshot?
     private var latestFix: GpsFix?
-    private var previousFix: GpsFix?
-    private var bmsSamples: [BmsSnapshot] = []
-    private var pending: [(GpsFix, GpsFix)] = []
-    private var intervals: [Interval] = []
-    private static let bmsMaxAge: TimeInterval = 5
-    private static let gpsMaxAge: TimeInterval = 10
+    private var previousEndpoint: Endpoint?
+    private var stationaryCharging = false
+    private var window = RangeDrivingWindow()
+    private var cachedWindow: RangeDrivingWindow?
+    private var voltageSamples: [Date: Double] = [:]
+    private static let telemetryMaxAge: TimeInterval = 30
+    private static let intervalMaxGap: TimeInterval = 10
+    private var bmsPairMaxAge: TimeInterval = 3
+    private static let persistenceVersion = "android-driving-window-v1-seed-only"
+    // 保留无硬件测试入口的既有默认值；生产 App 会应用 DrivingSettings (15min/10s)。
     @Published private(set) var windowAge: TimeInterval = 300
     @Published private(set) var predictionRefreshInterval: TimeInterval = 0
     private var lastPredictionAt: Date?
-    private var maximumIntervals = 256
+    private var lastPersistedAt: Date?
+    private var evidenceDirty = false
 
-    /// 无硬件构造入口：测试可使用隔离 UserDefaults/可控时钟，不触发蓝牙或定位权限。
     init(defaults: UserDefaults = .standard, clock: @escaping () -> Date = Date.init,
          exportDirectory: URL = FileManager.default.temporaryDirectory) {
         self.defaults = defaults
         self.clock = clock
         self.exportDirectory = exportDirectory
-        notBefore = clock()
+        let now = clock()
+        notBefore = now
+        lastClockAt = now
     }
 
     convenience init(bms: BmsBluetoothService, location: LocationService, defaults: UserDefaults = .standard) {
@@ -60,32 +67,38 @@ final class RangeService: ObservableObject {
         observe(bms: bms, location: location)
     }
 
-    /// 生产 App 显式配置；无硬件 init 的 5min/即时刷新契约保持不变。
-    /// 仅节流有效预测重算，安全状态仍在每次样本/1s heartbeat 立即检查。
+    /// 与 Android 相同：节流窗口快照，当前剩余 Ah 和安全状态不被刷新周期冻结。
     func applyDrivingSettings(_ settings: DrivingSettings) {
         let safe = settings.normalized()
-        let window = TimeInterval(safe.rangeWindowMinutes * 60)
+        let duration = TimeInterval(safe.rangeWindowMinutes * 60)
         let cadence = TimeInterval(safe.rangeRefreshSeconds)
-        guard windowAge != window || predictionRefreshInterval != cadence else { return }
-        windowAge = window
+        let pairAge = min(10, max(3, Double(safe.bluetoothRefreshIntervalMs) * 2 / 1_000))
+        guard windowAge != duration || predictionRefreshInterval != cadence || bmsPairMaxAge != pairAge else { return }
+        if bmsPairMaxAge != pairAge { previousEndpoint = nil }
+        bmsPairMaxAge = pairAge
+        windowAge = duration
         predictionRefreshInterval = cadence
-        maximumIntervals = max(256, Int(window) + 1)
+        window.trim(to: duration)
+        evidenceDirty = true
+        cachedWindow = nil
         lastPredictionAt = nil
+        persistWindow()
         refresh()
     }
 
     private func observe(bms: BmsBluetoothService, location: LocationService?) {
-        bmsService = bms
-        locationService = location
         connected = bms.state == .ready
         setDeviceID(connected ? bms.connectedDeviceID : nil)
         locationUpdating = location?.isUpdating == true
-        // @Published 在属性写入前发布：直接消费事件参数，不能在 sink 中回读旧值。
-        // 丢弃订阅时重放的缓存值，绑定设备/重置后必须重新收到样本。
+        // Published 在赋值前发送：直接消费事件参数，不回读旧属性。
         bms.$latestSnapshot.dropFirst().sink { [weak self] snapshot in
             guard let self else { return }
             if let snapshot { self.ingest(snapshot: snapshot) }
-            else { self.invalidateWindow(); self.latestSnapshot = nil; self.refresh() }
+            else {
+                self.latestSnapshot = nil
+                self.previousEndpoint = nil
+                self.refresh()
+            }
         }.store(in: &subscriptions)
         bms.$state.combineLatest(bms.$connectedDeviceID).sink { [weak self] state, id in
             guard let self else { return }
@@ -96,7 +109,11 @@ final class RangeService: ObservableObject {
             location.$lastFix.dropFirst().sink { [weak self] fix in
                 guard let self else { return }
                 if let fix { self.ingest(fix: fix) }
-                else { self.invalidateWindow(); self.latestFix = nil; self.refresh() }
+                else {
+                    self.latestFix = nil
+                    self.previousEndpoint = nil
+                    self.refresh()
+                }
             }.store(in: &subscriptions)
             location.$isUpdating.dropFirst().sink { [weak self] updating in
                 self?.setLocationUpdating(updating)
@@ -107,14 +124,17 @@ final class RangeService: ObservableObject {
         refresh()
     }
 
-    /// 由拥有真实连接 UUID 的主线程接线层调用。换设备清空窗口、读取该 UUID 的设置。
-    /// 蓝牙服务直接提供外设 UUID；服务不会把可重名的 connectedDeviceName 当作身份。
     func setDeviceID(_ id: UUID?) {
         guard deviceID != id else { return }
+        persistWindow()
         deviceID = id
         nominalCapacityAh = id.map { defaults.double(forKey: capacityKey($0)) } ?? 0
         if !nominalCapacityAh.isFinite || nominalCapacityAh < 0 { nominalCapacityAh = 0 }
-        restartSampling()
+        window.clear()
+        restartSampling(now: clock())
+        lastPersistedAt = nil
+        evidenceDirty = false
+        if let id { restoreWindow(for: id) }
         lastExportURL = nil
         lastError = nil
         refresh()
@@ -127,6 +147,7 @@ final class RangeService: ObservableObject {
             return false
         }
         nominalCapacityAh = value
+        cachedWindow = nil
         lastPredictionAt = nil
         defaults.set(value, forKey: capacityKey(deviceID))
         lastError = nil
@@ -134,269 +155,353 @@ final class RangeService: ObservableObject {
         return true
     }
 
-    /// 只清除当前设备的有效窗口，保留额定容量和窗口/刷新设置。
-    /// 不删除行程记录或已导出文件；清除后页面不再把旧导出 URL 当作当前结果。
+    /// 只忘记驾驶证据，保留容量/配置/行程/其他设备和已导出文件。
     func clearWindow() {
-        restartSampling()
+        window.clear()
+        evidenceDirty = true
+        persistWindow()
+        restartSampling(now: clock())
         lastExportURL = nil
         lastError = nil
         refresh()
     }
 
-    /// 只重置当前设备的容量设置与有效窗口，不影响行程记录/其他设备/已导出文件。
     func reset() {
         if let deviceID { defaults.removeObject(forKey: capacityKey(deviceID)) }
         nominalCapacityAh = 0
         clearWindow()
     }
 
-    // 以下主线程事件接口也用于无硬件测试；真实路径由已有服务的 Published 流驱动。
     func setConnectionReady(_ ready: Bool) {
         guard connected != ready else { return }
         connected = ready
-        if !ready { deviceID = nil; nominalCapacityAh = 0 }
-        restartSampling()
+        if !ready { setDeviceID(nil) }
+        restartSampling(now: clock())
         refresh()
     }
 
     func setLocationUpdating(_ updating: Bool) {
         guard locationUpdating != updating else { return }
         locationUpdating = updating
-        restartSampling()
+        persistWindow()
+        restartSampling(now: clock())
         refresh()
     }
 
+    /// BMS 更新只更新当前输入，不新增距离或能耗。GPS 回调才推进驾驶 FIFO。
     func ingest(snapshot: BmsSnapshot) {
         let now = clock()
+        checkClock(now)
         guard deviceID != nil, connected, snapshot.receivedAt >= notBefore else { return }
         guard snapshot.receivedAt <= now else {
-            latestSnapshot = nil; invalidateWindow(); refresh(); return
+            previousEndpoint = nil
+            stop(.noValidIntervals, "拒绝未来时间的 BMS 样本")
+            return
         }
-        if let latestSnapshot, snapshot.receivedAt <= latestSnapshot.receivedAt { return }
+        if let latestSnapshot, snapshot.receivedAt == latestSnapshot.receivedAt { return }
+        if let latestSnapshot, snapshot.receivedAt < latestSnapshot.receivedAt {
+            // New BMS time epoch: discard persisted driving evidence and both endpoint baselines.
+            discardDrivingEvidence()
+            self.latestSnapshot = nil
+            capacityBaseline = nil
+            latestFix = nil
+            previousEndpoint = nil
+            voltageSamples.removeAll()
+        }
         latestSnapshot = snapshot
         guard isUsable(snapshot, now: now) else {
-            invalidateWindow()
-            refresh()
+            previousEndpoint = nil
+            refresh(now: now)
             return
         }
-        if let previous = bmsSamples.last,
-           snapshot.receivedAt.timeIntervalSince(previous.receivedAt) > Self.bmsMaxAge {
-            invalidateWindow()
+        if let previous = capacityBaseline, hasCapacityJump(from: previous, to: snapshot) {
+            discardDrivingEvidence()
+            previousEndpoint = nil
         }
-        bmsSamples.append(snapshot)
-        bmsSamples.removeAll { now.timeIntervalSince($0.receivedAt) > 20 }
-        if bmsSamples.count > 64 { bmsSamples.removeFirst(bmsSamples.count - 64) }
-        consumePending(now: now)
-        refresh()
+        capacityBaseline = snapshot
+        voltageSamples[snapshot.receivedAt] = snapshot.totalVoltage
+        // Android BMS refresh 会解除旧的停车充电标记，但不会新增驾驶证据。
+        if snapshot.current >= 0 { stationaryCharging = false }
+        refresh(now: now)
     }
 
+    /// 与 Android 输入采样一致：GPS 端点使用当时最近一次 BMS，最多旧 3–10s；
+    /// 不借未来 BMS 回填，不把缺口补成零，不以 GPS 瞬时速度判定驾驶证据。
     func ingest(fix: GpsFix) {
         let now = clock()
+        checkClock(now)
         guard deviceID != nil, connected, locationUpdating, fix.timestamp >= notBefore else { return }
         guard fix.timestamp <= now else {
-            latestFix = nil; invalidateWindow(); refresh(); return
-        }
-        if let latestFix, fix.timestamp <= latestFix.timestamp { return }
-        latestFix = fix
-        guard isUsable(fix, now: now), fix.speed >= 1 else {
-            invalidateWindow()
-            refresh()
+            previousEndpoint = nil
+            stop(.noValidIntervals, "拒绝未来时间的 GPS 样本")
             return
         }
-        if let previousFix {
-            let dt = fix.timestamp.timeIntervalSince(previousFix.timestamp)
-            if dt <= Self.gpsMaxAge { pending.append((previousFix, fix)) }
-            else { invalidateWindow() }
+        if let latestFix, fix.timestamp == latestFix.timestamp { return }
+        if let latestFix, fix.timestamp < latestFix.timestamp {
+            // A regressed GPS epoch cannot be joined to the prior driving window.
+            discardDrivingEvidence()
+            previousEndpoint = nil
+            self.latestFix = nil
         }
-        previousFix = fix
-        if pending.count > 8 { pending.removeFirst(pending.count - 8) }
-        consumePending(now: now)
-        refresh()
-    }
-
-    /// 仅对两端均为有效行驶定位，且 BMS 样本完整覆盖相同时间段的区间积分。
-    /// 允许正常采样间的梯形积分；>5s 的 BMS 缺口、停车、充电、保护状态不插值。
-    private func consumePending(now: Date) {
-        while let pair = pending.first {
-            let (start, end) = pair
-            guard now.timeIntervalSince(end.timestamp) <= Self.gpsMaxAge else {
-                pending.removeFirst(); continue
-            }
-            guard let last = bmsSamples.last, last.receivedAt >= end.timestamp else { break }
-            pending.removeFirst()
-            guard let firstIndex = bmsSamples.lastIndex(where: { $0.receivedAt <= start.timestamp }),
-                  let lastIndex = bmsSamples.firstIndex(where: { $0.receivedAt >= end.timestamp }),
-                  firstIndex < lastIndex else { continue }
-            let samples = Array(bmsSamples[firstIndex...lastIndex])
-            var energy = 0.0
-            var netAh = 0.0
-            var covered = true
-            for (a, b) in zip(samples, samples.dropFirst()) {
-                let dt = b.receivedAt.timeIntervalSince(a.receivedAt)
-                guard dt > 0, dt <= Self.bmsMaxAge, let p0 = a.power, let p1 = b.power else {
-                    covered = false; break
-                }
-                let lower = max(start.timestamp, a.receivedAt)
-                let upper = min(end.timestamp, b.receivedAt)
-                guard upper > lower else { continue }
-                let wattsAtStart = p0 + (p1 - p0) * lower.timeIntervalSince(a.receivedAt) / dt
-                let wattsAtEnd = p0 + (p1 - p0) * upper.timeIntervalSince(a.receivedAt) / dt
-                let ampsAtStart = a.current + (b.current - a.current) * lower.timeIntervalSince(a.receivedAt) / dt
-                let ampsAtEnd = a.current + (b.current - a.current) * upper.timeIntervalSince(a.receivedAt) / dt
-                let hours = upper.timeIntervalSince(lower) / 3_600
-                energy += (wattsAtStart + wattsAtEnd) / 2 * hours
-                netAh += (ampsAtStart + ampsAtEnd) / 2 * hours
-            }
-            let distance = haversineMeters(from: start, to: end)
-            // 坐标位移须超过两点误差界，并排除 >60m/s 的定位跳变。
-            let dt = end.timestamp.timeIntervalSince(start.timestamp)
-            guard covered, energy.isFinite, energy > 0, netAh.isFinite, netAh >= 0, distance.isFinite,
-                  distance > start.horizontalAccuracy + end.horizontalAccuracy,
-                  distance / dt <= 60 else {
-                invalidateWindow()
-                return
-            }
-            intervals.append(Interval(startedAt: start.timestamp, endedAt: end.timestamp,
-                                      distanceMeters: distance, netWh: energy, netAh: netAh))
+        latestFix = fix
+        guard isUsable(fix, now: now), let snapshot = latestSnapshot,
+              isUsable(snapshot, now: now),
+              isRecent(snapshot.receivedAt, maxAge: bmsPairMaxAge, now: fix.timestamp) else {
+            previousEndpoint = nil
+            refresh(now: now)
+            return
         }
+        let endpoint = Endpoint(fix: fix, bms: snapshot)
+        defer { previousEndpoint = endpoint }
+        guard let previous = previousEndpoint else {
+            // A lone negative-current endpoint is not enough to infer stationary charging.
+            refresh(now: now)
+            return
+        }
+        let dt = fix.timestamp.timeIntervalSince(previous.fix.timestamp)
+        guard dt > 0, dt <= Self.intervalMaxGap else {
+            refresh(now: now)
+            return
+        }
+        let distance = haversineMeters(from: previous.fix, to: fix)
+        let span = RangeElectricalSpan(startedAt: previous.fix.timestamp, endedAt: fix.timestamp,
+                                       startPowerW: previous.bms.totalVoltage * previous.bms.current,
+                                       endPowerW: snapshot.totalVoltage * snapshot.current,
+                                       startCurrentA: previous.bms.current, endCurrentA: snapshot.current)
+        let interval = RangeDrivingInterval(startedAt: previous.fix.timestamp, endedAt: fix.timestamp,
+                                            distanceMeters: distance, electricalSpans: [span],
+                                            netAh: previous.bms.remainingAh - snapshot.remainingAh)
+        if window.append(interval) {
+            stationaryCharging = false
+            window.trim(to: windowAge)
+            evidenceDirty = true
+            // 采样通常 1Hz；最多每 10s 编码一次，不在每帧重写整池。
+            if lastPersistedAt.map({ now.timeIntervalSince($0) >= 10 }) != false { persistWindow() }
+        } else if interval.netWh.isFinite, interval.netAh.isFinite,
+                  distance.isFinite, distance >= 0, distance <= 2_000,
+                  distance / dt * 3.6 < 3 {
+            stationaryCharging = interval.netWh < 0
+        }
+        refresh(now: now)
     }
 
     func refresh(now: Date? = nil) {
         let now = now ?? clock()
-        intervals.removeAll { now.timeIntervalSince($0.endedAt) > windowAge }
-        // 60min 窗口不能被旧 256 条上限截成约 4min；1s 定位允许保留窗口内区间。
-        if intervals.count > maximumIntervals { intervals.removeFirst(intervals.count - maximumIntervals) }
-        accumulatedDistanceMeters = intervals.reduce(0) { $0 + $1.distanceMeters }
-        accumulatedNetWh = intervals.reduce(0) { $0 + $1.netWh }
-        accumulatedNetAh = intervals.reduce(0) { $0 + $1.netAh }
-        validIntervalCount = intervals.count
-        guard let deviceID else { stop(.disconnected, "尚未绑定稳定设备 ID，无法安全接入实时续航"); return }
-        guard connected else { stop(.disconnected); return }
-        guard locationUpdating else { stop(.noValidIntervals, "定位流未启动或未接入；续航服务不会自动申请权限"); return }
+        checkClock(now)
+        updateWindowMetrics()
+        if evidenceDirty, lastPersistedAt.map({ now.timeIntervalSince($0) >= 10 }) != false { persistWindow() }
+        guard let deviceID, connected else {
+            stop(.disconnected, deviceID == nil ? "尚未绑定稳定设备 ID，无法安全接入实时续航" : nil)
+            return
+        }
+        guard locationUpdating else { stop(.noValidIntervals, "定位流未启动，保留驾驶证据但暂停预测"); return }
         guard let snapshot = latestSnapshot else { stop(.accumulating, "等待本设备新的有效 BMS 样本"); return }
-        guard isRecent(snapshot.receivedAt, maxAge: Self.bmsMaxAge, now: now) else {
-            invalidateWindow(); stop(.telemetryStale); return
+        guard isRecent(snapshot.receivedAt, maxAge: Self.telemetryMaxAge, now: now) else {
+            stop(.telemetryStale); return
         }
-        if isCharging(snapshot) { stop(.charging); return }
-        // 当前协议只解码到通用错误状态，不能伪称已识别具体欠压/电芯化学体系。
-        guard snapshot.statusCode != 5 else { stop(.noValidIntervals, "BMS 报告错误/保护状态，暂停续航估计"); return }
-        guard isUsable(snapshot, now: now) else { stop(.noValidIntervals, "BMS 功率或容量样本无效"); return }
+        guard snapshot.statusCode != 5 else {
+            stop(.noValidIntervals, "BMS 报告错误/保护状态，暂停续航估计"); return
+        }
+        guard isUsable(snapshot, now: now) else { stop(.noValidIntervals, "BMS 电气样本无效"); return }
         guard nominalCapacityAh.isFinite, nominalCapacityAh > 0 else { stop(.capacityInvalid); return }
-        guard let fix = latestFix else { stop(.accumulating, "等待有效行驶定位样本"); return }
-        guard isRecent(fix.timestamp, maxAge: Self.gpsMaxAge, now: now) else {
-            invalidateWindow(); stop(.telemetryStale, "GPS 数据已过期，不能沿用旧窗口"); return
+        guard let fix = latestFix else { stop(.accumulating, "等待新鲜 GPS 样本，不沿用连接前的遥测"); return }
+        guard isRecent(fix.timestamp, maxAge: Self.telemetryMaxAge, now: now) else {
+            stop(.telemetryStale); return
         }
-        guard isUsable(fix, now: now), fix.speed >= 1 else {
-            stop(.noValidIntervals, "GPS 无效或车辆未行驶，等待新的有效行驶窗口"); return
-        }
+        guard isUsable(fix, now: now) else { stop(.noValidIntervals, "GPS 样本无效，排除坏区间"); return }
+        if stationaryCharging { stop(.charging); return }
         guard let remainingEnergy = AndroidEnergyCurve.remainingEnergyWh(
             remainingAh: snapshot.remainingAh, capacityAh: nominalCapacityAh) else {
             stop(.capacityInvalid); return
         }
-        // 窗口指标每次更新；刷新频率仅用于下面的续航预测，不延迟安全校验/真实测量值。
-        let distanceKm = accumulatedDistanceMeters / 1_000
-        let duration = intervals.reduce(0) { $0 + $1.endedAt.timeIntervalSince($1.startedAt) }
-        averageSpeedKmh = duration > 0 ? accumulatedDistanceMeters / duration * 3.6 : nil
-        if accumulatedNetAh > 0 {
-            let reference = distanceKm / accumulatedNetAh
-            referenceKmPerAh = reference.isFinite ? reference : nil
-        } else {
-            referenceKmPerAh = nil
+        voltageSamples = Dictionary(uniqueKeysWithValues: voltageSamples.filter {
+            isRecent($0.key, maxAge: 60, now: now)
+        })
+        let sortedVoltages = voltageSamples.values.sorted()
+        let middle = sortedVoltages.count / 2
+        let voltageUsed = sortedVoltages.isEmpty ? snapshot.totalVoltage
+            : (sortedVoltages.count % 2 == 1 ? sortedVoltages[middle]
+                : (sortedVoltages[middle - 1] + sortedVoltages[middle]) / 2)
+        guard voltageUsed.isFinite, voltageUsed > 0 else { stop(.telemetryStale); return }
+        // 只缓存窗口；剩余 Ah/Wh 使用最新 BMS。保护状态不等待 cadence。
+        if cachedWindow == nil || lastPredictionAt.map({ now.timeIntervalSince($0) >= predictionRefreshInterval }) != false {
+            cachedWindow = window
+            lastPredictionAt = now
         }
-        effectiveWhPerKm = distanceKm > 0 ? accumulatedNetWh / distanceKm : nil
-        let shouldRefresh = lastPredictionAt.map {
-            now < $0 || now.timeIntervalSince($0) >= predictionRefreshInterval
-        } ?? true
-        // 首个有效窗口/状态恢复立即计算；有效预测期间遵守所选刷新频率。
-        if status == .valid, prediction != nil, accumulatedNetWh > 0,
-           accumulatedDistanceMeters > 0, !shouldRefresh { return }
-        lastPredictionAt = now
+        updateWindowMetrics() // 展示系数与预测使用同一刷新批次，累计证据仍实时更新。
+        guard let sampled = cachedWindow else { stop(.accumulating); return }
+        guard sampled.predictionStatus == .valid else {
+            stop(sampled.predictionStatus); return
+        }
+        guard let last = window.intervals.last,
+              isRecent(last.endedAt, maxAge: Self.telemetryMaxAge, now: now) else {
+            stop(.telemetryStale); return
+        }
         let result = RangePredictor(settings: RangeSettings(nominalCapacityAh: nominalCapacityAh,
-                                                            deviceID: deviceID.uuidString))
-            .predict(remainingAh: snapshot.remainingAh, netWh: accumulatedNetWh,
-                     distanceMeters: accumulatedDistanceMeters, remainingEnergyWh: remainingEnergy)
+                                                           deviceID: deviceID.uuidString))
+            .predict(remainingAh: snapshot.remainingAh, netWh: sampled.netWh,
+                     distanceMeters: sampled.distanceMeters, remainingEnergyWh: remainingEnergy)
         prediction = result
         status = result.status
         reasonText = result.reasonText
-        if result.status != .valid {
-            effectiveWhPerKm = nil
-            averageSpeedKmh = nil
-            referenceKmPerAh = nil
-        }
+        if result.status != .valid { hideWindowMetrics() }
+    }
+
+    private func updateWindowMetrics() {
+        let total = window.summary
+        accumulatedDistanceMeters = total.distanceMeters
+        accumulatedNetWh = total.netWh
+        accumulatedNetAh = total.netAh
+        accumulatedDischargeWh = total.dischargeWh
+        accumulatedRegenerationWh = total.regenerationWh
+        effectiveDuration = total.duration
+        validIntervalCount = window.intervals.count
+        let sampled = (cachedWindow ?? window).summary
+        averageSpeedKmh = sampled.duration > 0 ? sampled.distanceMeters / sampled.duration * 3.6 : nil
+        referenceKmPerAh = sampled.netAh > 0 ? sampled.distanceMeters / 1_000 / sampled.netAh : nil
+        effectiveWhPerKm = sampled.distanceMeters > 0 ? sampled.netWh / (sampled.distanceMeters / 1_000) : nil
+    }
+
+    private func hideWindowMetrics() {
+        effectiveWhPerKm = nil
+        averageSpeedKmh = nil
+        referenceKmPerAh = nil
     }
 
     private func stop(_ value: RangePredictionStatus, _ reason: String? = nil) {
         prediction = nil
-        effectiveWhPerKm = nil
-        averageSpeedKmh = nil
-        referenceKmPerAh = nil
-        lastPredictionAt = nil
+        hideWindowMetrics()
         status = value
         reasonText = reason ?? value.reason
     }
 
-    private func restartSampling() {
-        notBefore = clock()
+    /// 普通缺口只断配对；显式清除、设备切换、Ah 跳变/时钟回退才清驾驶证据。
+    private func restartSampling(now: Date) {
+        notBefore = now
         latestSnapshot = nil
+        capacityBaseline = nil
         latestFix = nil
-        invalidateWindow()
+        previousEndpoint = nil
+        stationaryCharging = false
+        voltageSamples.removeAll()
+        cachedWindow = nil
+        lastPredictionAt = nil
+        lastClockAt = now
     }
 
-    private func invalidateWindow() {
+    private func discardDrivingEvidence() {
+        window.clear()
+        stationaryCharging = false
+        evidenceDirty = true
+        cachedWindow = nil
         lastPredictionAt = nil
-        previousFix = nil
-        bmsSamples.removeAll()
-        pending.removeAll()
-        intervals.removeAll()
-        accumulatedDistanceMeters = 0
-        accumulatedNetWh = 0
-        accumulatedNetAh = 0
-        averageSpeedKmh = nil
-        referenceKmPerAh = nil
-        validIntervalCount = 0
-        effectiveWhPerKm = nil
-        prediction = nil
+        voltageSamples.removeAll()
+        persistWindow()
+    }
+
+    private func checkClock(_ now: Date) {
+        if now < lastClockAt {
+            discardDrivingEvidence()
+            restartSampling(now: now)
+        }
+        lastClockAt = now
+    }
+
+    private func hasCapacityJump(from previous: BmsSnapshot, to current: BmsSnapshot) -> Bool {
+        let dt = current.receivedAt.timeIntervalSince(previous.receivedAt)
+        guard dt > 0, current.capacityAh.isFinite, current.capacityAh > 0 else { return false }
+        let delta = abs(current.remainingAh - previous.remainingAh)
+        let explained = (abs(previous.current) + abs(current.current)) / 2 * dt / 3_600
+        return delta > explained + current.capacityAh * 0.01
     }
 
     private func capacityKey(_ id: UUID) -> String { "com.zjsf.anturide.range.capacity.\(id.uuidString)" }
+    private func evidenceKey(_ id: UUID) -> String { "com.zjsf.anturide.range.driving.\(id.uuidString)" }
     private func isRecent(_ date: Date, maxAge: TimeInterval, now: Date) -> Bool {
         let age = now.timeIntervalSince(date)
         return age.isFinite && age >= 0 && age <= maxAge
     }
-    private func isCharging(_ value: BmsSnapshot) -> Bool {
-        value.statusCode == 2 || value.current < 0 || (value.power.map { $0 < 0 } ?? false)
-    }
     private func isUsable(_ value: BmsSnapshot, now: Date) -> Bool {
-        guard isRecent(value.receivedAt, maxAge: Self.bmsMaxAge, now: now),
-              value.isFreshCandidate, value.totalVoltage.isFinite,
-              value.current.isFinite, value.remainingAh.isFinite, value.remainingAh >= 0,
-              let watts = value.power, watts.isFinite, watts >= 0,
-              !isCharging(value), value.statusCode != 5 else { return false }
+        let power = value.totalVoltage * value.current
+        guard isRecent(value.receivedAt, maxAge: Self.telemetryMaxAge, now: now),
+              value.isFreshCandidate, value.totalVoltage.isFinite, value.totalVoltage <= 300,
+              value.current.isFinite, abs(value.current) <= 2_000,
+              value.remainingAh.isFinite, value.remainingAh >= 0,
+              power.isFinite, abs(power) <= 500_000, value.statusCode != 5 else { return false }
+        if let reported = value.power {
+            guard reported.isFinite else { return false }
+            if abs(power) > 50, abs(reported) > 50, (power < 0) != (reported < 0) { return false }
+        }
         return true
     }
     private func isUsable(_ fix: GpsFix, now: Date) -> Bool {
-        isRecent(fix.timestamp, maxAge: Self.gpsMaxAge, now: now)
-            && fix.isUsable(maxAccuracy: 50) && fix.speed.isFinite && fix.speed >= 0 && fix.speed <= 60
+        isRecent(fix.timestamp, maxAge: Self.telemetryMaxAge, now: now)
+            && fix.isUsable(maxAccuracy: .infinity) && fix.speed.isFinite && fix.speed >= 0
     }
     private func haversineMeters(from a: GpsFix, to b: GpsFix) -> Double {
         let lat1 = a.latitude * .pi / 180, lat2 = b.latitude * .pi / 180
         let dLat = lat2 - lat1, dLon = (b.longitude - a.longitude) * .pi / 180
         let h = pow(sin(dLat / 2), 2) + cos(lat1) * cos(lat2) * pow(sin(dLon / 2), 2)
-        return 6_371_000 * 2 * asin(sqrt(min(1, max(0, h))))
+        return 6_371_008.8 * 2 * asin(sqrt(min(1, max(0, h))))
+    }
+    private struct Endpoint { let fix: GpsFix; let bms: BmsSnapshot }
+
+    // 驾驶证据与容量偏好分开；不是电池校准，重连必须收到新的真实 BMS/GPS。
+    private struct StoredWindow: Codable {
+        let version: String
+        let deviceID: UUID
+        let intervals: [RangeDrivingInterval]
+    }
+    private func persistWindow() {
+        guard let deviceID else { return }
+        let key = evidenceKey(deviceID)
+        guard !window.intervals.isEmpty else {
+            defaults.removeObject(forKey: key)
+            lastPersistedAt = clock()
+            evidenceDirty = false
+            return
+        }
+        do {
+            let payload = StoredWindow(version: Self.persistenceVersion, deviceID: deviceID, intervals: window.intervals)
+            defaults.set(try JSONEncoder().encode(payload), forKey: key)
+            lastPersistedAt = clock()
+            evidenceDirty = false
+        } catch {
+            evidenceDirty = true
+            lastError = "保存驾驶窗口失败：\(error.localizedDescription)"
+        }
+    }
+    private func restoreWindow(for id: UUID) {
+        guard let data = defaults.data(forKey: evidenceKey(id)), data.count <= 16_000_000,
+              let stored = try? JSONDecoder().decode(StoredWindow.self, from: data),
+              stored.version == Self.persistenceVersion, stored.deviceID == id,
+              stored.intervals.count <= 36_000 else { return }
+        let now = clock()
+        for interval in stored.intervals where interval.endedAt <= now {
+            _ = window.append(interval) // 领域入口重新校验数值、覆盖、重复、重叠和驾驶阈值。
+        }
+        window.trim(to: windowAge)
     }
 
-    // MARK: - 本地导出（主线程按钮可直接使用返回的 URL / ShareLink）
-    private struct Interval: Codable {
+    // MARK: - 本地导出（无原始 GPS 坐标，净能耗可包含移动再生）
+    private struct ExportInterval: Encodable {
         let startedAt: Date
         let endedAt: Date
         let distanceMeters: Double
         let netWh: Double
         let netAh: Double
+        let dischargeWh: Double
+        let regenerationWh: Double
+        init(_ interval: RangeDrivingInterval) {
+            startedAt = interval.startedAt; endedAt = interval.endedAt
+            distanceMeters = interval.distanceMeters; netWh = interval.netWh; netAh = interval.netAh
+            dischargeWh = interval.dischargeWh; regenerationWh = interval.regenerationWh
+        }
     }
     private struct Export: Encodable {
         let energyDataVersion = AndroidEnergyCurve.version
-        let schemaVersion = 2
-        let model = "valid-window; Android built-in seed/legacy; learning disabled"
+        let schemaVersion = 3
+        let model = "Android effective-driving FIFO; built-in seed/legacy; learning disabled"
         let generatedAt: Date
         let deviceID: String?
         let nominalCapacityAh: Double?
@@ -407,11 +512,14 @@ final class RangeService: ObservableObject {
         let distanceMeters: Double
         let netWh: Double
         let netAh: Double
+        let dischargeWh: Double
+        let regenerationWh: Double
+        let effectiveDuration: TimeInterval
         let averageSpeedKmh: Double?
         let referenceKmPerAh: Double?
         let windowSeconds: TimeInterval
         let predictionRefreshSeconds: TimeInterval
-        let intervals: [Interval]
+        let intervals: [ExportInterval]
     }
 
     func exportJSON() throws -> URL {
@@ -421,9 +529,11 @@ final class RangeService: ObservableObject {
                              status: status, reason: reasonText, predictedRangeKm: prediction?.predictedRangeKm,
                              whPerKm: effectiveWhPerKm, distanceMeters: accumulatedDistanceMeters,
                              netWh: accumulatedNetWh, netAh: accumulatedNetAh,
+                             dischargeWh: accumulatedDischargeWh, regenerationWh: accumulatedRegenerationWh,
+                             effectiveDuration: effectiveDuration,
                              averageSpeedKmh: averageSpeedKmh, referenceKmPerAh: referenceKmPerAh,
                              windowSeconds: windowAge, predictionRefreshSeconds: predictionRefreshInterval,
-                             intervals: intervals)
+                             intervals: window.intervals.map(ExportInterval.init))
         return try writeExport(extension: "json") {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -434,21 +544,18 @@ final class RangeService: ObservableObject {
 
     func exportCSV() throws -> URL {
         refresh()
-        let whPerKmText = effectiveWhPerKm.map { String($0) } ?? ""
-        let predictedRangeText = prediction?.predictedRangeKm.map { String($0) } ?? ""
-        let averageSpeedText = averageSpeedKmh.map { String($0) } ?? ""
-        let referenceText = referenceKmPerAh.map { String($0) } ?? ""
         let values: [String] = [
             ISO8601DateFormatter().string(from: clock()), deviceID?.uuidString ?? "",
             nominalCapacityAh > 0 ? String(nominalCapacityAh) : "",
             String(accumulatedDistanceMeters), String(accumulatedNetWh),
-            whPerKmText, predictedRangeText,
+            effectiveWhPerKm.map { String($0) } ?? "", prediction?.predictedRangeKm.map { String($0) } ?? "",
             status.rawValue, reasonText, String(accumulatedNetAh),
-            averageSpeedText, referenceText,
-            String(windowAge), String(predictionRefreshInterval)
+            averageSpeedKmh.map { String($0) } ?? "", referenceKmPerAh.map { String($0) } ?? "",
+            String(windowAge), String(predictionRefreshInterval),
+            String(accumulatedDischargeWh), String(accumulatedRegenerationWh), String(effectiveDuration)
         ]
         let fields = values.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-        let csv = "generated_at,device_id,nominal_capacity_ah,distance_meters,net_wh,wh_per_km,predicted_range_km,status,reason,net_ah,average_speed_kmh,reference_km_per_ah,window_seconds,prediction_refresh_seconds\r\n"
+        let csv = "generated_at,device_id,nominal_capacity_ah,distance_meters,net_wh,wh_per_km,predicted_range_km,status,reason,net_ah,average_speed_kmh,reference_km_per_ah,window_seconds,prediction_refresh_seconds,discharge_wh,regeneration_wh,effective_duration_seconds\r\n"
             + fields.joined(separator: ",") + "\r\n"
         return try writeExport(extension: "csv") { Data(csv.utf8) }
     }
@@ -482,7 +589,7 @@ extension RangePredictionStatus {
         case .valid: return "基础估计有效"
         case .telemetryStale: return "遥测过期"
         case .noValidIntervals: return "无有效区间"
-        case .charging: return "充电/负功率"
+        case .charging: return "停车充电"
         case .capacityInvalid: return "容量未设置或无效"
         case .undervoltage: return "欠压保护"
         case .disconnected: return "未连接/未绑定设备"

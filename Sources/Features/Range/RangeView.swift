@@ -33,12 +33,15 @@ struct RangeView: View {
                 LabeledContent("参考电耗", value: range.referenceKmPerAh
                     .map { String(format: "%.2f km/Ah", $0) } ?? "--")
                     .accessibilityIdentifier("range.reference.consumption")
-                LabeledContent("有效窗口时长", value: "最近 \(windowMinutes) 分钟")
+                LabeledContent("有效窗口时长", value: "累计 \(windowMinutes) 分钟")
                 LabeledContent("预测刷新", value: refreshDescription)
                 if range.validIntervalCount > 0 {
                     LabeledContent("有效窗口", value: String(format: "%.0f m / %.2f Wh / %d 段",
                         range.accumulatedDistanceMeters, range.accumulatedNetWh, range.validIntervalCount))
-                    LabeledContent("窗口放电量", value: String(format: "%.4f Ah", range.accumulatedNetAh))
+                    LabeledContent("窗口净容量变化", value: String(format: "%.4f Ah", range.accumulatedNetAh))
+                    LabeledContent("窗口放电 / 回收", value: String(format: "%.2f / %.2f Wh",
+                        range.accumulatedDischargeWh, range.accumulatedRegenerationWh))
+                    LabeledContent("已积累驾驶时长", value: String(format: "%.0f 秒", range.effectiveDuration))
                 } else {
                     Label("尚无有效行驶窗口", systemImage: "questionmark.circle")
                         .foregroundStyle(.secondary)
@@ -77,9 +80,9 @@ struct RangeView: View {
                 Text("导出当前状态与有效窗口；没有有效窗口时也会导出明确的空状态，不包含原始 GPS 坐标，不会上传。")
             }
             Section("估计边界") {
-                Text("续航使用最近 \(windowMinutes) 分钟内保留的有效行驶区间和安卓内置能量曲线（\(AndroidEnergyCurve.version)）。窗口只保留通过 BMS/GPS 校验的区间，数据缺口、停车、充电/负功率和保护状态不会被补算。")
-                Text("窗口平均速度按有效位移与区间时长计算；参考电耗按相同区间真实放电电流积分计算 km/Ah，不使用总行程，也不以 Wh/电压推算 Ah。零放电量时不显示参考电耗。")
-                Text("额定容量按当前稳定外设 UUID 保存。页面不会执行电池学习或校准，也不会导入手机私有学习数据库；状态不满足条件时不显示续航数值。")
+                Text("续航使用最近累计 \(windowMinutes) 分钟的有效驾驶区间和安卓内置能量曲线（\(AndroidEnergyCurve.version)）。区间平均速度须达到 3 km/h；至少积累 30 秒、200 米、5 Wh 放电和 5 Wh 净能耗。移动回收从放电中扣除；停车不推进窗口，缺口与坏区间不补算，也不淘汰旧驾驶证据。")
+                Text("窗口平均速度按有效位移与区间时长计算；参考电耗按相同区间 BMS 剩余 Ah 差值计算 km/Ah，不使用总行程，也不以 Wh/电压推算 Ah。净 Ah 不为正时不显示参考电耗。")
+                Text("额定容量与驾驶证据按当前稳定外设 UUID 本机保存；重连仍需新的 BMS/GPS，遥测或最后驾驶证据超过 30 秒不显示预测。页面不会执行电池学习或校准，也不会导入手机私有学习数据库；状态不满足条件时不显示续航数值。")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
