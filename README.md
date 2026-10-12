@@ -31,7 +31,7 @@ scripts/fetch-ipa.sh -r <Run ID>     # 取指定运行
 
 ```
 build/ci/<短提交号>/ANTuRide-unsigned.ipa
-build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
+build/ci/latest/ANTuRide-unsigned.ipa    # 指向最近一次被采纳交付的成功构建
 ```
 
 ## 当前施工阶段
@@ -101,4 +101,5 @@ build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
 - GitHub Actions Run `38202579046` 对应 SHA 完全一致且成功，14 个具名步骤全部通过（作业 8m53s）；SwiftPM 161 项、iOS 测试 364 项、XCUITest 12 项零失败；四项源码契约 33 例通过。
 - IPA：`build/ci/60101a4/ANTuRide-unsigned.ipa`；`build/ci/latest/` 已同步。2276667 字节，SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`。
 - 原始包 unsigned、无 provisioning profile，须用个人 Apple 开发者签名后安装。模拟器与 CI 不代表真实 iPhone 续航窗口、GPS 漂移、断连重连或车辆验收通过。
+- 随后的文档交付提交 `e81449c` 连带运行 `38204388224` 同样成功（9m31s）；其产物内层 `.ipa` 大小与包内条目和 `60101a4` 完全一致，但字节流跨 Run 不可比，因此 `latest/` 保持指向 `60101a4` 的已核验构建，`e81449c` 的产物另存 `build/ci/e81449c/`。
 - 完整范围、异常处理、仍保留差异与 4 轮 CI 迭代见 `docs/CONSTRUCTION_LOG.md` 步骤 041、`docs/CI_BUILD_RESULTS.md` 和 `docs/IOS_ANDROID_PARITY_AUDIT.md`。后续文档提交不改变已构建源码，也不声称重新构建。

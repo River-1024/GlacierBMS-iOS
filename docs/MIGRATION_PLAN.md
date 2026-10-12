@@ -605,6 +605,6 @@ Dashboard 减项、行程 Tab 归位、根页隐藏导航栏与 Swift Charts 迁
 
 仍保留的差异：过期/断连时 iOS 撤下预测（Android 保留旧数值并标记暂停）；iOS 保留更严格的数据有效性检查；Android 原始区间审计、排除原因记录与回放体系未移植。
 
-源码 `60101a4d826418fec9879ca33400e13130208c13`（`60101a4`）已推送 `codex/ios-parity-20261010`；Run `38202579046` 精确 SHA 成功，14 个具名步骤全部通过，SwiftPM 161、iOS XCTest 364、XCUITest 12 全部零失败，四项源码契约 33 例通过。unsigned IPA 2276667 字节、SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`，已归档 `build/ci/60101a4/` 并由 `build/ci/latest/` 同步（四份文件同指该 Run）。4 轮 CI 迭代的失败定位与修复见 `docs/CI_BUILD_RESULTS.md` 第 1、4 节。
+源码 `60101a4d826418fec9879ca33400e13130208c13`（`60101a4`）已推送 `codex/ios-parity-20261010`；Run `38202579046` 精确 SHA 成功，14 个具名步骤全部通过，SwiftPM 161、iOS XCTest 364、XCUITest 12 全部零失败，四项源码契约 33 例通过。unsigned IPA 2276667 字节、SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`，已归档 `build/ci/60101a4/` 并由 `build/ci/latest/` 同步（四份文件同指该 Run）。4 轮 CI 迭代的失败定位与修复见 `docs/CI_BUILD_RESULTS.md` 第 1、4 节。交付文档提交 `e81449c` 的连带运行 `38204388224` 同样成功（9m31s），仅用于证明文档改动不破坏构建；其产物归档 `build/ci/e81449c/`，因源码与 `60101a4` 相同而未替换 `latest`。
 
 未完成项仍是需要真实 iPhone + BLE + 车辆的验收（真实 GPS 漂移、断连重连、后台锁屏、容量跳变、VoiceOver/大字号）；未签名 IPA 必须先用个人证书签名。文档提交不改变已构建源码，也不意味着对文档版本重新构建。

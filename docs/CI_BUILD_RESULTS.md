@@ -8,7 +8,7 @@
 
 ## 1. 结论
 
-**最近一次更新（2026-10-12 12:30）：** 续航驾驶窗口算法对齐 Android（effective-driving FIFO）经 4 轮 CI 迭代后全绿：Run `38202579046`（提交 `60101a4`，`workflow_dispatch`）14 个具名步骤全部成功（作业 04:08:42 → 04:17:35 UTC，8m53s），产物 2276667 字节，已归档 `build/ci/60101a4/`。测试基线：SwiftPM 161、iOS XCTest 364、XCUITest 12，全部零失败；四项源码契约 33 例通过（设置 6（含 2 例 Android 对照显式跳过）、Dashboard 6、蓝牙 10、续航 11）。迭代修复：① 编译级漏参（`RangeServiceTests:913` 缺 `longitude`，`Tests/AppTests` 不参与 `swift test`，静态检查无法发现）；② 测试语义与实现不符（`testNetAh` 步长笔误致区间全拒、`testColdRestoration` 缺断连 flush 前置）；③ UI 测试时序不稳（`bluetooth.battery.filter` 高负载偶发丢 tap，条件重试加固）。
+**最近一次更新（2026-10-12 12:30）：** 续航驾驶窗口算法对齐 Android（effective-driving FIFO）经 4 轮 CI 迭代后全绿：Run `38202579046`（提交 `60101a4`，`workflow_dispatch`）14 个具名步骤全部成功（作业 04:08:42 → 04:17:35 UTC，8m53s），产物 2276667 字节，已归档 `build/ci/60101a4/`。测试基线：SwiftPM 161、iOS XCTest 364、XCUITest 12，全部零失败；四项源码契约 33 例通过（设置 6（含 2 例 Android 对照显式跳过）、Dashboard 6、蓝牙 10、续航 11）。迭代修复：① 编译级漏参（`RangeServiceTests:913` 缺 `longitude`，`Tests/AppTests` 不参与 `swift test`，静态检查无法发现）；② 测试语义与实现不符（`testNetAh` 步长笔误致区间全拒、`testColdRestoration` 缺断连 flush 前置）；③ UI 测试时序不稳（`bluetooth.battery.filter` 高负载偶发丢 tap，条件重试加固）。交付文档提交 `e81449c` 及其连带运行 `38204388224` 同样成功（9m31s），用于证明文档改动不破坏构建；其产物归档 `build/ci/e81449c/`，因源码与 `60101a4` 相同而未替换 `latest`。
 
 **上一轮（2026-10-10 12:15）：** 新增本地取包脚本 `scripts/fetch-ipa.sh`（详见第 7.1 节），构建产物从此按提交号归档到 `build/ci/<短SHA>/`，并由 `build/ci/latest/` 指向最近一次成功。
 
@@ -42,6 +42,7 @@
 
 | Run ID | 提交 | 结论 | 说明 |
 |---|---|---|---|
+| 38204388224 | `e81449c` | 成功 | 文档提交连带验证（不改源码）；作业 04:35:20 → 04:44:51 UTC（9m31s）；内层 .ipa 2276667 字节、13 条目与 `60101a4` 完全一致 |
 | 38202579046 | `60101a4` | 成功 | 续航驾驶窗口对齐全量验证；SwiftPM 161、iOS XCTest 364、XCUITest 12 零失败；产物 2276667 字节，归档 `build/ci/60101a4/` |
 | 38201483521 | `c7004b1` | 失败 | 单元测试全过；UI 用例 `bluetooth.battery.filter` 偶发丢 tap（同二进制对照证实时序不稳） |
 | 38200692584 | `5bc519e` | 失败 | 新增回归测试首次真实执行：`testNetAh` 步长笔误、`testColdRestoration` 缺断连前置 |
@@ -104,6 +105,7 @@
 
 | 产物名 | 来源运行 | 大小 | 保留 | 状态 |
 |---|---|---|---|---|
+| `ANTuRide-unsigned-ipa` | `38204388224`（`e81449c`） | 2276667 字节 | 7 天 | 已归档 `build/ci/e81449c/`；纯文档提交，源码同 `60101a4`，未替换 `latest` |
 | `ANTuRide-unsigned-ipa` | `38202579046`（`60101a4`） | 2276667 字节 | 7 天 | 已取回本地 `build/ci/60101a4/`（当前 latest） |
 | `ANTuRide-unsigned-ipa` | `38022973698`（`b32508a`） | 1292490 字节 | 7 天 | 已取回本地 `build/ci/b32508a/` |
 | `ANTuRide-unsigned-ipa` | `38022252771`（`4ab1c9b`） | 1292490 字节 | 7 天 | 未过期 |
@@ -178,7 +180,7 @@ scripts/fetch-ipa.sh --all            # 取该次运行的全部 artifact
 
 ```
 build/ci/<短提交号>/ANTuRide-unsigned.ipa
-build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
+build/ci/latest/ANTuRide-unsigned.ipa    # 指向最近一次被采纳交付的成功构建（源码相同的纯文档提交连带构建另存按提交号目录，不替换它）
 ```
 
 **脚本内建校验**（杜绝拿到半截包或拿错包）：
@@ -190,7 +192,9 @@ build/ci/latest/ANTuRide-unsigned.ipa    # 始终指向最近一次成功
 
 **健壮性**：产物下载走 Azure Blob，偶发 502/503/504 与超时。脚本对这类临时错误自动重试 2 次（间隔 3 秒）；4xx、权限与参数错误不重试（重试无意义）。重试仍失败时打印三类常见原因（产物过期 / 网络抖动 / 该 Run 无此产物）而非甩原始报错。实测已遇到一次持续 502，重试机制按预期生效并在网络恢复后取包成功。
 
-> **注意**：无签名 IPA 的 SHA-256 **跨 Run 不可比**——即使源码无变化，dSYM UUID 与打包时间戳也会让字节流不同。哈希只用于校验「下载完整性」（同一次 Run 重复下载应一致），不作为跨提交的等价判据。跨提交可比的是文件大小与包内条目清单。
+> **注意**：无签名 IPA 的 SHA-256 **跨 Run 不可比**——即使源码无变化，dSYM UUID 与打包时间戳也会让字节流不同。哈希只用于校验「下载完整性」（同一次 Run 重复下载应一致），不作为跨提交的等价判据。跨 Run 可比的是**解出的 `.ipa` 文件大小**与**包内条目清单（含各条目尺寸）**，**不是** artifact 容器大小。
+>
+> 2026-10-12 实测（`60101a4` 与纯文档提交 `e81449c`：源码仅差 README/docs 的两次构建）：内层 `.ipa` 均为 2276667 字节，13 条目与逐条目尺寸**完全一致**；但两次 SHA-256 不同（`f2ee0df3…` / `4b3aff93…`），artifact **容器**大小也不同（2267760 / 2267762 字节）。容器是外层压缩包，受打包时间戳与压缩差异影响，用它比对会得出「源码相同却体积不同」的假结论。
 
 `build/` 已在仓库 `.gitignore` 内，本地产出目录不会被提交。脚本位置 `scripts/fetch-ipa.sh`，随仓库跟踪。
 

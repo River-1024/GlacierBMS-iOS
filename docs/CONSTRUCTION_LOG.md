@@ -473,6 +473,8 @@
 | 38201483521 | `c7004b1` | 失败 | 单元测试全过；界面开关 `bluetooth.battery.filter` 偶发丢 tap；条件重试加固为 `60101a4` |
 | 38202579046 | `60101a4` | 成功 | 14 个具名步骤全部成功，作业 04:08:42 → 04:17:35 UTC（8m53s） |
 
+- 交付文档提交 `e81449c`（本步骤 041 的落档提交）连带运行 `38204388224` 同样成功，作业 04:35:20 → 04:44:51 UTC（9m31s）；它只证明文档改动不破坏构建，不是新的交付构建，产物归档 `build/ci/e81449c/`。
+
 - 三项修复均未改动实现代码。`Tests/AppTests` 不参与 `swift test`，其编译与语义错误只能在 `xcodebuild` 真执行时暴露，前两轮失败属测试夹具问题；第三轮以同一 App 二进制的两次运行对照（UI 套件 193 s，首点坐标与通过运行时一致）判定为时序不稳，加固仍保留「两次点击后依然失败」的真实故障检出能力。
 - 测试基线（Run `38202579046`）：SwiftPM 161、iOS XCTest 364、XCUITest 12，全部零失败；四项源码契约 33 例通过（设置 6，其中 2 例 Android 对照在独立 checkout 显式跳过；Dashboard 6；蓝牙 10；续航 11）。
 - 回归覆盖：`RangeDrivingWindowTests` 24 例（窗口与积分）、`RangeServiceTests` 41 例（服务、配对、持久化与恢复）。
@@ -484,5 +486,6 @@
 - 核验：13 个 ZIP 条目、CRC 全通过；主二进制 4531352 字节，含 `RangeDrivingWindow` / `RangeElectricalSpan` / `RangeDrivingInterval` / `RangeService` 符号；`Assets.car` 946264、`PrivacyInfo.xcprivacy` 397、`ANTuRideDomain.framework/ANTuRideDomain` 927568 字节。
 - 标识：`com.zjsf.anturide`、显示名「安途」、版本 0.1.0 (1)、`CFBundleIconName = AppIcon`、`MinimumOSVersion = 16.0`、`UIBackgroundModes = [location]`；无 `embedded.mobileprovision`、无 `_CodeSignature`、主二进制 47 条加载命令中无 `LC_CODE_SIGNATURE`，确认为 unsigned，须个人签名后安装。
 - 证据 `run.json`、`ci.log`（878676 字节）、`artifact-verification.json` 与 IPA 均保存在被忽略的 `build/ci/60101a4/`、`build/ci/latest/`，不进入 Git；`latest/` 的四个文件已统一指向 Run `38202579046`，不再混用上一批 `01aec26` 的元数据。
+- `latest/` 语义据此明确为「最近一次**被采纳交付**的成功构建」：`e81449c` 是同一源码的纯文档提交重建，内层 `.ipa` 2276667 字节、13 条目与逐条目尺寸和 `60101a4` 完全一致，但 SHA-256 不同（`4b3aff93…`）、artifact 容器大小差 2 字节，故不替换 `latest`，避免交付物与已核验证据脱钩。跨 Run 可比量只有内层 `.ipa` 大小与包内条目清单，容器大小与 SHA 都不可比。
 - 本地静态检查：四项契约 33/33（续航 11/11）与 `git diff --check` 通过，均为 Windows 静态结果；编译与测试证据来自上述 macOS CI。
 - 尚待真实 iPhone + BLE + 车辆：真实 GPS 漂移、断连重连、后台锁屏、容量跳变下的窗口表现，以及 VoiceOver/大字号显示。CI 通过和 unsigned IPA 不代表硬件验收。
