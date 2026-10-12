@@ -567,3 +567,9 @@
 - Run 38214557408 对应 a9d3d3b1bc6a6e494091bc5cf97f229c59fda732；静态检查和 SwiftPM 通过，模拟器 target 编译失败，未执行 XCTest/XCUITest 或打包。
 - Dashboard 重构误引用不存在的 RangeService.rangeKm，修正为既有 prediction?.predictedRangeKm；继续保留 status == .valid 的有效性门禁，新增静态回归断言。
 - 历史 run 38208098933 的旧编辑页恢复默认 UI 失败仅作为历史背景，不作为本轮验证依据。继续提交修复、dispatch 准确新 SHA。
+
+#### 第二轮 CI 编译修复（2026-10-12 14:59:57 +08:00）
+
+- Run 38214797900 对应 514e8f607a164a0a76cc1d30e8e19f296472f615；五项源代码契约与 SwiftPM 通过，但 Xcode 在 NativeParameterGrid.swift 因 EnvironmentValues.accessibilityReduceMotion 是只读 KeyPath 而拒绝写入，模拟器测试未启动。
+- 移除只读环境值写入：保留 Dynamic Type/Color Scheme/Layout Direction 传递；减少动态效果改用 transaction 禁用动画，测试同样调整为 transaction。
+- 不改变拖动、数据或导航行为；再次提交并 dispatch 准确 SHA。

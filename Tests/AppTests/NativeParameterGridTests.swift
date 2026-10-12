@@ -128,7 +128,7 @@ final class NativeParameterGridTests: XCTestCase {
         let host = UIHostingController(rootView: AnyView(grid
             .environment(\.dynamicTypeSize, dynamicTypeSize)
             .environment(\.layoutDirection, .leftToRight)
-            .environment(\.accessibilityReduceMotion, true)
+            .transaction { transaction in transaction.animation = nil }
             .ignoresSafeArea()))
         let container = UIViewController()
         container.loadViewIfNeeded()
