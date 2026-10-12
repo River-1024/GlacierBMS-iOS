@@ -3,19 +3,19 @@ import XCTest
 final class ANTuRideUITests: XCTestCase {
     func testLaunchSmoke() throws {
         let app = XCUIApplication()
-        app.launch()
+        launch(app)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
     }
 
     func testDashboardHasNoHeaderAndTripControlsBelongToTrips() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-trips-empty"]
-        app.launch()
-        XCTAssertTrue(app.scrollViews["dashboard.parameter-content"].waitForExistence(timeout: 5))
+        launch(app)
+        XCTAssertTrue(app.collectionViews["dashboard.parameter-content"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.navigationBars.count, 0, "Dashboard must not reserve a navigation header")
         XCTAssertFalse(app.buttons["trip-session.start"].exists)
         XCTAssertFalse(app.buttons["trip-session.stop"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["dashboard.slot.top_speed"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["dashboard.metric.app_gps_speed"].exists)
         app.tabBars.buttons["\u{884C}\u{7A0B}"].tap()
         XCTAssertTrue(app.buttons["trip-session.start"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["trip-session.stop"].exists)
@@ -24,15 +24,15 @@ final class ANTuRideUITests: XCTestCase {
     func testDashboardRemainsScrollableInLandscapeAndLargeText() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-trips-empty", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
-        app.launch()
+        launch(app)
         defer { XCUIDevice.shared.orientation = .portrait }
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(waitForOrientation(app, landscape: true))
-        let scroll = app.scrollViews["dashboard.parameter-content"]
+        let scroll = app.collectionViews["dashboard.parameter-content"]
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
         XCTAssertEqual(app.navigationBars.count, 0)
         let target = app.descendants(matching: .any)
-            .matching(identifier: "dashboard.slot.controller_fault").firstMatch
+            .matching(identifier: "dashboard.metric.controller_fault").firstMatch
         for _ in 0..<80 {
             if target.isHittable { break }
             scroll.swipeUp()
@@ -44,7 +44,7 @@ final class ANTuRideUITests: XCTestCase {
     func testTripHistoryEmptyState() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-trips-empty"]
-        app.launch()
+        launch(app)
         app.tabBars.buttons["行程"].tap()
         XCTAssertTrue(app.staticTexts["暂无行程"].waitForExistence(timeout: 5))
     }
@@ -52,7 +52,7 @@ final class ANTuRideUITests: XCTestCase {
     func testSavedTripNavigationAndSegments() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-trips-seeded"]
-        app.launch()
+        launch(app)
         app.tabBars.buttons["行程"].tap()
         let row = app.buttons["trip-row-11111111-1111-1111-1111-111111111111"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
@@ -73,7 +73,7 @@ final class ANTuRideUITests: XCTestCase {
 
     func testFiveTabsExposeSettingsWithoutMore() {
         let app = XCUIApplication()
-        app.launch()
+        launch(app)
         XCTAssertEqual(app.tabBars.buttons.count, 5)
         for title in ["仪表盘", "电池", "控制器", "行程", "设置"] {
             XCTAssertTrue(app.tabBars.buttons[title].exists, title)
@@ -82,6 +82,7 @@ final class ANTuRideUITests: XCTestCase {
         XCTAssertFalse(app.tabBars.buttons["更多"].exists)
         app.tabBars.buttons["设置"].tap()
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["settings.home"].exists, "布局编辑只在对应页面提供")
         // 横屏返回竖屏仍显示固定五标签，设置不落入系统 More。
         defer { XCUIDevice.shared.orientation = .portrait }
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -98,7 +99,7 @@ final class ANTuRideUITests: XCTestCase {
 
     func testSettingsHubHasSingleRangeEditorAndSeparateDrivingEditor() {
         let app = XCUIApplication()
-        app.launch()
+        launch(app)
         app.tabBars.buttons["设置"].tap()
         let rangeEntry = app.buttons["settings.range"]
         XCTAssertTrue(rangeEntry.waitForExistence(timeout: 5))
@@ -127,23 +128,24 @@ final class ANTuRideUITests: XCTestCase {
 
     func testRangeResultsRemainAccessibleFromDashboard() {
         let app = XCUIApplication()
-        app.launch()
+        launch(app)
         let results = app.buttons["dashboard.range"]
-        XCTAssertTrue(results.waitForExistence(timeout: 5))
+        // 新入口在重点参数后的曲线标题行，必须通过真实页面滚动后点击。
+        scrollUntilVisible(results, in: app)
         results.tap()
         XCTAssertTrue(app.navigationBars["综合续航"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["range.reason"].exists)
         XCTAssertFalse(app.textFields["range.capacity"].exists)
         XCTAssertFalse(app.buttons["窗口、容量与重置"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(results.waitForExistence(timeout: 5))
+        scrollUntilVisible(results, in: app)
         XCTAssertEqual(app.navigationBars.count, 0, "Returning to Dashboard must hide the whole navigation bar")
     }
 
     func testRangeDefaultsRequireConfirmationAndPreserveDrivingPreferences() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-settings-seeded"]
-        app.launch()
+        launch(app)
         app.tabBars.buttons["设置"].tap()
         app.buttons["settings.range"].tap()
         let oldWindow = app.staticTexts.matching(NSPredicate(format: "label == %@", "30 分钟")).firstMatch
@@ -174,7 +176,7 @@ final class ANTuRideUITests: XCTestCase {
     func testBatteryAndControllerTabsOnlyShowTheirOwnDataAndHistoryIsSecondary() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-bluetooth-empty"]
-        app.launch()
+        launch(app)
         app.tabBars.buttons["电池"].tap()
         XCTAssertTrue(app.navigationBars["电池"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["battery.noData"].exists)
@@ -197,7 +199,7 @@ final class ANTuRideUITests: XCTestCase {
     func testBluetoothSettingsHasSeparateNameFiltersAndAutoConnectionControls() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-bluetooth-empty"]
-        app.launch()
+        launch(app)
         app.tabBars.buttons["设置"].tap()
         app.buttons["settings.bluetooth"].tap()
         XCTAssertTrue(app.navigationBars["蓝牙设备"].waitForExistence(timeout: 5))
@@ -231,7 +233,7 @@ final class ANTuRideUITests: XCTestCase {
     func testForgettingBatteryDoesNotForgetControllerAndRequiresConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-bluetooth-seeded"]
-        app.launch()
+        launch(app)
         app.tabBars.buttons["设置"].tap()
         app.buttons["settings.bluetooth"].tap()
         let forgetBattery = app.buttons["bluetooth.battery.forget"]
@@ -251,10 +253,41 @@ final class ANTuRideUITests: XCTestCase {
         XCTAssertTrue(rememberedController.label.contains("APT-Test-Controller"))
     }
 
+    func testRPMToolNavigationRemainsAvailableFromSettings() {
+        let app = XCUIApplication()
+        launch(app)
+        app.tabBars.buttons["设置"].tap()
+        let entry = app.buttons["settings.acceleration"]
+        scrollUntilVisible(entry, in: app)
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["加速测试"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["RPM 单渠道 · 实时数据"].exists)
+        let coefficient = app.textFields["acceleration-coefficient"]
+        scrollUntilVisible(coefficient, in: app)
+        XCTAssertTrue(coefficient.isHittable)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+    }
+
+    private func launch(_ app: XCUIApplication) {
+        // 保留各用例的 seeded/empty 场景；没有设置测试标记时补上禁 BLE 的启动标记。
+        let isolatedFlags = ["--ui-test-settings-seeded", "--ui-test-bluetooth-empty", "--ui-test-bluetooth-seeded"]
+        if !app.launchArguments.contains(where: { isolatedFlags.contains($0) }) {
+            app.launchArguments.append("--ui-test-bluetooth-empty")
+        }
+        if app.launchEnvironment["ANTURIDE_UI_TEST_HOME_SUITE"]?.hasPrefix("UITest-Home-") != true {
+            app.launchEnvironment["ANTURIDE_UI_TEST_HOME_SUITE"] = "UITest-Home-Navigation-\(UUID().uuidString)"
+        }
+        app.launch()
+    }
+
     private func scrollUntilVisible(_ element: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<12 {
             if element.exists && element.isHittable { return }
-            app.swipeUp()
+            let grid = ["dashboard", "battery", "controller"]
+                .map { app.collectionViews["\($0).parameter-content"] }
+                .first { $0.exists && $0.isHittable }
+            if let grid { grid.swipeUp() } else { app.swipeUp() }
         }
         XCTAssertTrue(element.exists && element.isHittable, "未找到可交互元素：\(element.identifier)")
     }

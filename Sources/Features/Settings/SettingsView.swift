@@ -23,14 +23,10 @@ struct SettingsView: View {
                         Label("驾驶与显示设置", systemImage: "slider.horizontal.3")
                     }
                     .accessibilityIdentifier("settings.driving")
-                    NavigationLink { HomeParameterEditorView() } label: {
-                        Label("首页参数", systemImage: "rectangle.3.group")
-                    }
-                    .accessibilityIdentifier("settings.home")
                 } header: {
                     Text("驾驶与显示")
                 } footer: {
-                    Text("主题、字号、功率图、颜色阈值、BMS 查询周期在驾驶设置中修改；首页固定使用槽位布局，槽位指标独立保存，未保存的草稿不会生效。")
+                    Text("主题、字号、功率图、颜色阈值、BMS 查询周期在驾驶设置中修改；参数布局在仪表盘、电池、控制器页面内编辑，完成后保存。")
                 }
 
                 Section {

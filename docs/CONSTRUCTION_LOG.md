@@ -511,3 +511,53 @@
 - 静态独立审阅容量服务/设置/详情未发现可操作缺陷；最终 12 个修改/新增 Swift 文件经 Tree-sitter Swift 扫描无 ERROR/missing 节点。语法树检查不等于类型检查或 iOS 编译。
 - 本机未检测到 Swift/Xcode 工具；本轮尚未运行 SwiftPM、iOS XCTest/XCUITest、macOS CI 或真实 iPhone/BMS/车辆验证。既往 CI/IPA 不覆盖本轮改动。
 - 未提交、推送、部署或生成新 IPA；源码与回归测试保持本地待验证，不能把旧 IPA 当成本轮交付。
+
+## 步骤 043：三 Tab 分类参数卡与原生页面内布局编辑（北京时间 2026-10-12 14:42:56 +08:00）
+
+### 已实施的本地源码
+
+- 仪表盘、电池、控制器使用共享 AppMetricCard 与 ParameterCardPage；电池按电池包/单体/温度/工作状态/诊断，控制器按电气转速/温度/输入/运行故障/专业参数/诊断分类。
+- 原生 UICollectionView + compositional layout + diffable + UIHostingConfiguration，单一纵向滚动容器，不新增 UI 依赖。编辑时同组插入排序；仪表盘重点区与真实来源区移动，拒绝跨来源非法落位/外部或其他网格导入。
+- 曲线固定在重点参数与来源分组之间；拖动只移动，替换经菜单/原生 sheet 处理。顶部接管底部时删除底部原位置、旧顶部参数归还来源分类；自动增添/收拢，无永久空框或同页重复指标。
+- 页面内添加、隐藏、替换、保存/取消、确认恢复默认；三页独立草稿与偏好。设置页旧首页入口与旧编辑 View 删除，不维护第二套编辑器。
+- 新 v3 key 保留真实用户顺序；首页旧 v1/v2 JSON 保留不重写，迁移保留原 27 指标及有效自定义/动态归还配置。单体/探头绑定真实编号，上报数量减少不重置已存排序，新通道独立追加到 baseline/draft，不泄漏未保存编辑。
+- 首页普通状态继续无导航栏/固定 header/标题占位；编辑入口在现有卡片中，操作条仅编辑时位于 Tab 上方。续航和控制器历史以 Button 请求、外层 navigationDestination 承接系统导航，不依赖 UIKit 单元格的 NavigationLink 环境。
+- 连接、数据有效性、错误和严重故障提示不随卡片显隐消失；MOS 部分未知不显示关，过期/缺失为 --，有效零保留。未增加 MOS/控制器参数写入、故障清除、扫描/连接动作。
+- Dynamic Type 单列降级、减少动态效果、语义主题和 VoiceOver 非拖动移动/来源归还操作；只读状态不提供无效果的排序动作。
+- 简化：移除旧编辑页、私有未使用 StatusChipsCard 和重复未使用的 store relative-move 入口；菜单/VoiceOver 共用显示通道索引映射。
+
+### 独立审阅与修复
+
+- 审阅发现 repeatingSubitem 紧凑 item 原宽度为整组 fractionalWidth，修正为真实可用宽度扣除左右 32pt 与列间 8pt 后计算 absolute 列宽。普通 2 列/宽屏 3 列需 UIKit frame 运行回归，不能由辅助字号单列通过推断。
+- UI 用例套件初版前缀未匹配生产 UITest-Home- 白名单，已修复全部布局用例及重启入口的套件检查，避免回退标准偏好；保持禁用真实 BLE。
+- 原生拖动期间延后结构 snapshot，仅提起卡保留预览，其他可见卡继续有效性刷新；不把无 reload 当作流畅证据。
+
+### 已取得的验证证据
+
+- 修改前四项 Python 源码契约 36/36 通过；完成后 Dashboard 6、设置 7、蓝牙 10、续航 13、参数卡 14，共 **50/50 静态源码契约通过**。
+- 已新增 38 个域布局 XCTest、23 个 App 偏好/Store XCTest、16 个只读参数 XCTest；页面编辑 UI 类更新为 12 个用例，保留并更新原导航/蓝牙/行程/RPM 回归。这些 Swift 用例目前仅完成编写，尚未执行。
+- 变更 Swift 文件已进行 Tree-sitter ERROR/missing 节点扫描；最终精确数量与追加 UIKit 布局回归见本步骤末尾验证记录。语法树无错不是 Swift 类型检查。
+- git diff --check 通过；仓库已有 Windows LF/CRLF 提示不计为功能验证。新参数卡静态检查加入 macOS workflow，但本轮未触发执行。
+- Sources/App、Sources/Services、领域协议/设置、Package.swift、project.yml 未改；保留五 Tab、BLE/定位/日志与行程隐私边界、RPM-only，不改 Android 父仓库。
+
+### 未完成的运行验收与交付边界
+
+- 本机无 swift/xcodebuild；**未运行 SwiftPM、Swift/Xcode 编译、iOS XCTest/XCUITest、模拟器或真实 iPhone/BMS/车辆验收**。历史 CI、已安装 IPA 不覆盖本轮更改。
+- 需 macOS 编译核对 UIKit/SwiftUI 类型与 actor isolation；运行保存/取消/重启、来源归还、真实长按拖放、普通 2/3 列几何、横屏/最大字号/VoiceOver/减少动态效果与详情返回回归。
+- 50ms 控制器遥测下可见 hosting configuration 更新尚无限频；需 Instruments 测量主线程、自适应高度、SwiftUI 状态复用和滚动/长拖卡顿，当前不声称已达到流畅验收。
+- 本轮未提交、push、部署、生成或替换 IPA。当前交付为本地源码、测试与施工文档，计划见 PARAMETER_CARD_EDITING_PLAN.md。
+
+### 步骤 043 最终本地验证记录（北京时间 2026-10-12 14:45:11 +08:00）
+
+- 最终五项 Python 静态契约 **50/50** 通过；17 个变更/新增 Swift 文件 Tree-sitter 扫描无 ERROR/missing 节点；git diff --check 通过。
+- 新增 UIKit 真实 frame 布局回归 5 个（375pt 两列、812pt 三列、两种宽度 compact/fullWidth/添加按钮混排、812pt xxxLarge 单列），使用独立宿主、有限异步等待与 teardown，尚未执行。
+- 本轮新域/App XCTest 合计 **82 个**（38 + 23 + 16 + 5），HomeParameterEditingUITests 更新为 12 个交互用例；用例编写/语法通过不代表 XCTest/XCUITest 运行通过。
+- 所有代理已收尾，独立审阅发现的多列尺寸问题已修复；未新增未处理确定性代码发现。仍保留上文 Swift 类型检查/编译、实际布局与拖动、50ms 性能和真机验收缺口。
+- 无提交、push、CI dispatch、部署或新 IPA；本地变更与施工记录保留，下次验收以准确新提交 SHA 为准，不沿用历史 CI/产物。
+
+### 步骤 044：按用户授权提交并启动三 Tab 参数卡 macOS 编译（2026-10-12 14:50:43 +08:00）
+
+- 用户最新要求“进行 监控编译 直到ipa”，本步覆盖步骤 043 的不自动提交/推送限定；仅操作独立 iOS 仓库，不涉及 Android 父仓库。
+- 再次验证五项 Python 静态契约 50/50 通过，git diff --check 通过；已核验 GitHub CLI 认证、远端与 feature 分支。
+- 提交参数卡实现、原生编辑/排序、来源归还及迁移、82 个新增域/App 测试与 UI 回归、设计/施工文档及 CI 静态门禁。
+- 将明确 dispatch 当前 feature 分支，并核验 run headSha；Xcode 编译、XCTest/XCUITest 和 unsigned IPA 验证在此记录时仍待 CI。失败将修复并重跑，不以旧 CI 证明新改动。

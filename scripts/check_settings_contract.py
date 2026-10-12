@@ -27,7 +27,7 @@ class SettingsSourceContracts(unittest.TestCase):
         hub = source("Sources/Features/Settings/SettingsView.swift")
         self.assertEqual(hub.count("RangeSettingsView()"), 1)
         self.assertNotIn("RangeView()", hub)
-        for page in ("DrivingSettingsView", "HomeParameterEditorView",
+        for page in ("DrivingSettingsView",
                      "AccelerationView", "ControllerHistoryView", "LogViewerView"):
             self.assertEqual(hub.count(page + "("), 1, page)
 
@@ -42,7 +42,7 @@ class SettingsSourceContracts(unittest.TestCase):
     def test_results_and_export_remain_on_dashboard(self):
         dashboard = source("Sources/Features/Dashboard/DashboardView.swift")
         self.assertTrue("RangeView()" in dashboard, "Missing range result entry on dashboard")
-        self.assertFalse("HomeParameterEditorView()" in dashboard, "Home editor must stay in Settings")
+        self.assertFalse("HomeParameterEditorView()" in dashboard, "Legacy home editor must be removed")
         results = source("Sources/Features/Range/RangeView.swift")
         self.assertNotIn("RangeSettingsView()", results)
         self.assertIn('accessibilityIdentifier("range.export.json")', results)
@@ -51,22 +51,20 @@ class SettingsSourceContracts(unittest.TestCase):
         self.assertNotIn("range.exportJSON()", settings)
         self.assertNotIn("range.exportCSV()", settings)
 
-    def test_home_has_only_slots_and_native_candidate_navigation(self):
-        editor = source("Sources/Features/Home/HomeParameterEditorView.swift")
+    def test_layout_editors_live_on_parameter_pages_not_settings(self):
+        hub = source("Sources/Features/Settings/SettingsView.swift")
+        page = source("Sources/Features/Parameters/ParameterCardPage.swift")
         dashboard = source("Sources/Features/Dashboard/DashboardView.swift")
-        model = source("Sources/Features/Home/HomeParameterModels.swift")
-        self.assertNotIn('Toggle(', editor)
-        self.assertNotIn('editMode', editor)
-        self.assertNotIn('旧版首页卡片', editor)
-        self.assertIn('HomeParameterCandidateView(session: $session, slotId: assignment.slotId)', editor)
-        self.assertIn('home.candidate.', editor)
-        self.assertIn('home.save', editor)
-        self.assertIn('home.cancel', editor)
-        self.assertNotIn('visibleCards', dashboard)
-        self.assertNotIn('parameterCard(', dashboard)
-        self.assertIn('loadForHome()', dashboard)
-        self.assertIn('decoded.forHome', model)
-        self.assertIn('if !decoded.usesSlotLayout { save(config) }', model)
+        prefs = source("Sources/Features/Parameters/ParameterLayoutStore.swift")
+        self.assertNotIn("HomeParameterEditorView", hub)
+        self.assertNotIn("settings.home", hub)
+        self.assertIn("ParameterCardPage(store: layout", dashboard)
+        self.assertIn("ParameterMetricPicker(store: store", page)
+        self.assertIn("store.beginEditing()", page)
+        self.assertIn("store.cancel()", page)
+        self.assertIn("store.finish()", page)
+        self.assertIn("HomeParameterPrefs.decode", prefs)
+        self.assertNotIn("loadForHome()", prefs, "Migration must not rewrite legacy JSON")
 
     @unittest.skipUnless(ANDROID.is_file(), "Sibling Android checkout not available")
     def test_android_shared_defaults_match(self):

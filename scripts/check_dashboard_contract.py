@@ -23,7 +23,10 @@ class DashboardSourceContracts(unittest.TestCase):
         self.assertIn(".toolbar(.hidden, for: .navigationBar)", self.dashboard)
         self.assertNotIn(".ignoresSafeArea", self.dashboard)
         self.assertNotIn(".glassCard", self.dashboard)
-        self.assertIn('.accessibilityElement(children: .contain)\n        .accessibilityIdentifier("dashboard.slot.', self.dashboard)
+        page = source("Sources/Features/Parameters/ParameterCardPage.swift")
+        self.assertIn(".accessibilityElement(children: .contain)", page)
+        self.assertIn(r'metric.\(placement.id)', page)
+        self.assertIn("middleContent: AnyView(powerGraphic)", self.dashboard)
 
     def test_trip_controls_only_belong_to_trip_tab(self):
         self.assertNotIn("TripControlCard", self.dashboard)
@@ -56,10 +59,13 @@ class DashboardSourceContracts(unittest.TestCase):
 
     def test_dynamic_type_and_saved_slots_are_retained(self):
         self.assertIn("@ScaledMetric", self.dashboard)
-        self.assertIn("dynamicTypeSize.isAccessibilitySize", self.dashboard)
-        self.assertIn("HomeParameterPrefs.decode(storedLayout)", self.dashboard)
-        self.assertIn("HomeParameterSlotDefinition.heroIDs", self.dashboard)
-        self.assertIn("HomeParameterSlotDefinition.gridIDs", self.dashboard)
+        page = source("Sources/Features/Parameters/ParameterCardPage.swift")
+        catalog = source("Sources/Features/Parameters/ParameterCatalog.swift")
+        self.assertIn("dynamicTypeSize.isAccessibilitySize", page)
+        self.assertIn("ParameterLayoutStore(page: .dashboard)", self.dashboard)
+        self.assertIn("legacy.forHome.assignments", catalog)
+        self.assertIn('slot.id == "top_speed"', catalog)
+        self.assertIn('slot.id == "top_range"', catalog)
         self.assertNotIn("frame(width: 290)", self.dashboard)
         self.assertNotIn("frame(height: 118)", self.dashboard)
         self.assertNotIn("minimumScaleFactor(0.3)", self.dashboard)

@@ -2,7 +2,7 @@ import ANTuRideDomain
 import Charts
 import SwiftUI
 
-/// 首页只显示已保存布局的驾驶参数；连接与行程操作分别位于设备和行程 Tab。
+/// 页面内编辑布局；曲线固定在重点参数和来源分类之间，连接/行程操作不回到首页。
 @MainActor
 struct DashboardView: View {
     @EnvironmentObject private var bms: BmsBluetoothService
@@ -10,52 +10,31 @@ struct DashboardView: View {
     @EnvironmentObject private var rangeService: RangeService
     @EnvironmentObject private var controller: ControllerBluetoothService
     @EnvironmentObject private var driving: DrivingSettingsStore
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .largeTitle) private var heroValueSize: CGFloat = 56
-    @ScaledMetric(relativeTo: .title2) private var primaryValueSize: CGFloat = 28
-    @ScaledMetric(relativeTo: .title3) private var compactValueSize: CGFloat = 20
-    // 与设置编辑器共用同一偏好键；保存后即使 Tab 未重建也会刷新。
-    @AppStorage(HomeParameterPrefs.key, store: HomeParameterPrefs().defaults) private var storedLayout = ""
-
-    private var homeConfig: HomeParameterConfig {
-        (HomeParameterPrefs.decode(storedLayout) ?? .androidDefault).forHome
-    }
+    @StateObject private var layout = ParameterLayoutStore(page: .dashboard)
+    @State private var showingRange = false
 
     var body: some View {
         NavigationStack {
-            GeometryReader { geometry in
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let freshness = BmsFreshnessEvaluator().evaluate(snapshot: bms.latestSnapshot, now: context.date)
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            slotDashboard(freshness: freshness, size: geometry.size)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .frame(minHeight: geometry.size.height, alignment: .top)
-                    }
-                    .accessibilityIdentifier("dashboard.parameter-content")
-                    .background(AppTheme.background)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let freshness = BmsFreshnessEvaluator().evaluate(snapshot: bms.latestSnapshot, now: context.date)
+                ParameterCardPage(store: layout, middleContent: AnyView(powerGraphic),
+                                  valueScale: driving.settings.valueScale) { placement in
+                    AnyView(metricCard(placement, freshness: freshness, now: context.date))
                 }
             }
             // 仅根页隐藏导航栏，不忽略状态栏、刘海或 Tab 的系统安全区。
             .toolbar(.hidden, for: .navigationBar)
-            .task {
-                // 首次进入也持久化旧配置迁移；渲染不等待迁移即可使用槽位。
-                _ = HomeParameterPrefs().loadForHome()
+            .navigationDestination(isPresented: $showingRange) {
+                RangeView().toolbar(.visible, for: .navigationBar)
             }
         }
     }
 
     private var rangeLink: some View {
-        NavigationLink {
-            RangeView()
-                .toolbar(.visible, for: .navigationBar)
-        } label: {
+        // 单元格的 UIHostingConfiguration 不是导航根；路由交由外层 NavigationStack。
+        Button { showingRange = true } label: {
             Label("续航", systemImage: "gauge.with.dots.needle.33percent")
-                .font(.subheadline)
-                .frame(minWidth: 44, minHeight: 44)
+                .font(.subheadline).frame(minWidth: 44, minHeight: 44)
         }
         .accessibilityLabel("综合续航")
         .accessibilityIdentifier("dashboard.range")
@@ -64,10 +43,13 @@ struct DashboardView: View {
     @ViewBuilder
     private var powerGraphic: some View {
         if driving.settings.defaultPowerDisplayMode == .curve {
-            BmsHistoryChartCard(history: bms.snapshotHistory, metric: .power) { EmptyView() }
+            BmsHistoryChartCard(history: bms.snapshotHistory, metric: .power) { rangeLink }
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                Text("实时功率").font(.headline)
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text("实时功率").font(.headline); Spacer(); rangeLink }
+                    VStack(alignment: .leading) { Text("实时功率").font(.headline); rangeLink }
+                }
                 if let snapshot = bms.latestSnapshot, bms.state == .ready,
                    BmsFreshnessEvaluator().evaluate(snapshot: snapshot, now: Date()).level == .fresh,
                    let power = snapshot.power, power.isFinite {
@@ -77,160 +59,60 @@ struct DashboardView: View {
                     Text(String(format: "%.0f W / %.0f W", power, base)).monospacedDigit()
                 } else { Text("--").foregroundStyle(.secondary) }
             }
-            .padding()
-            .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding().background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
-    @ViewBuilder
-    private func slotDashboard(freshness: BmsDataFreshness, size: CGSize) -> some View {
-        let wide = size.width >= 600
-            && size.width > size.height
-            && !dynamicTypeSize.isAccessibilitySize
-            && driving.settings.valueScale < 1.5
-        if wide {
-            HStack(alignment: .top, spacing: 12) {
-                topSlotCards(freshness: freshness)
-                    .frame(maxWidth: .infinity)
-                powerGraphic
-                    .frame(maxWidth: .infinity)
-            }
-        } else {
-            topSlotCards(freshness: freshness)
-            powerGraphic
-        }
-        bottomSlots(in: .vehicle, freshness: freshness)
-        bottomSlots(in: .controller, freshness: freshness)
-    }
-
-    private func topSlotCards(freshness: BmsDataFreshness) -> some View {
-        VStack(spacing: 8) {
-            ForEach(HomeParameterSlotDefinition.heroIDs, id: \.self) { slotId in
-                if let metricId = homeConfig.metricId(for: slotId) {
-                    slotCard(HomeParameterAssignment(slotId: slotId, metricId: metricId), freshness: freshness,
-                             fontSize: slotId == "top_speed" ? heroValueSize : primaryValueSize,
-                             showsRangeLink: slotId == "top_speed")
-                }
-            }
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 8),
-                                count: dynamicTypeSize.isAccessibilitySize || driving.settings.valueScale >= 1.5 ? 1 : 2)
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(HomeParameterSlotDefinition.gridIDs, id: \.self) { slotId in
-                    if let metricId = homeConfig.metricId(for: slotId) {
-                        slotCard(HomeParameterAssignment(slotId: slotId, metricId: metricId), freshness: freshness,
-                                 fontSize: primaryValueSize)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func bottomSlots(in region: HomeParameterRegion, freshness: BmsDataFreshness) -> some View {
-        let assignments = homeConfig.assignments(in: region)
-        let rows = HomeParameterLayout.rows(assignments, in: region)
-        if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(region.title).font(.headline)
-                if dynamicTypeSize.isAccessibilitySize || driving.settings.valueScale >= 1.5 {
-                    LazyVStack(spacing: 8) {
-                        ForEach(assignments) { assignment in
-                            slotCard(assignment, freshness: freshness)
-                        }
-                    }
-                } else {
-                    Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-                        ForEach(rows.indices, id: \.self) { index in
-                            let row = rows[index]
-                            let used = row.reduce(0) { $0 + HomeParameterLayout.span($1, in: region) }
-                            GridRow(alignment: .top) {
-                                ForEach(row) { assignment in
-                                    slotCard(assignment, freshness: freshness)
-                                        .gridCellColumns(HomeParameterLayout.span(assignment, in: region))
-                                }
-                                ForEach(0..<(3 - used), id: \.self) { _ in
-                                    Color.clear
-                                        .gridCellUnsizedAxes([.horizontal, .vertical])
-                                        .accessibilityHidden(true)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func slotCard(_ assignment: HomeParameterAssignment, freshness: BmsDataFreshness,
-                          fontSize: CGFloat? = nil, showsRangeLink: Bool = false) -> some View {
+    private func metricCard(_ placement: ParameterPlacement, freshness: BmsDataFreshness, now: Date) -> some View {
         let snapshot = bms.state == .ready && freshness.level == .fresh ? bms.latestSnapshot : nil
+        let gpsSpeed: Double? = {
+            guard location.isUpdating, let fix = location.lastFix,
+                  now.timeIntervalSince(fix.timestamp) >= 0, now.timeIntervalSince(fix.timestamp) <= 10 else { return nil }
+            return fix.speedKmhForDisplay
+        }()
+        let telemetry = freshControllerTelemetry(now: now)
         let readout = HomeParameterReadout.read(
-            metricId: assignment.metricId, snapshot: snapshot,
-            gpsSpeedKmh: location.lastFix.flatMap { fix in
-                let age = Date().timeIntervalSince(fix.timestamp)
-                return location.isUpdating && age >= 0 && age <= 10 && fix.isSpeedValid ? fix.speed * 3.6 : nil
-            },
-            rangeKm: rangeService.status == .valid ? rangeService.prediction?.predictedRangeKm : nil,
+            metricId: placement.metricID, snapshot: snapshot, gpsSpeedKmh: gpsSpeed,
+            rangeKm: rangeService.status == .valid ? rangeService.rangeKm : nil,
             consumptionWhPerKm: rangeService.status == .valid ? rangeService.effectiveWhPerKm : nil,
-            controller: freshControllerTelemetry, settings: driving.settings,
+            controller: telemetry, settings: driving.settings,
             averageSpeedKmh: rangeService.averageSpeedKmh, referenceKmPerAh: rangeService.referenceKmPerAh,
             bmsRSSI: bms.rssiReceivedAt.flatMap { date in
-                let age = Date().timeIntervalSince(date)
+                let age = now.timeIntervalSince(date)
                 return bms.state == .ready && age >= 0 && age <= 10 ? bms.rssi : nil
             }
         )
-        return VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    parameterTitle(readout.title)
-                    if showsRangeLink { Spacer(minLength: 8); rangeLink }
+        let source = ParameterCatalog.descriptor(placement.metricID, on: .dashboard)?.source
+        let detail: String? = {
+            if readout.value == "--" {
+                if source == .bms {
+                    return bms.state != .ready ? "BMS 未连接" : freshness.level == .stale ? "数据已过期" : "等待 BMS 数据"
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    parameterTitle(readout.title)
-                    if showsRangeLink { rangeLink }
+                if source == .controller {
+                    return controller.state != .ready ? "控制器未连接" : "等待有效控制器数据 / 数据已过期"
                 }
+                if placement.metricID == "app_range" { return rangeService.reasonText }
+                return "等待有效数据"
             }
-            Text(readout.value)
-                .font(.system(size: (fontSize ?? compactValueSize) * driving.settings.valueScale,
-                              weight: .semibold, design: .rounded))
-                .foregroundStyle(metricColor(assignment.metricId, snapshot: snapshot))
-                .monospacedDigit()
-                .lineLimit(dynamicTypeSize.isAccessibilitySize || driving.settings.valueScale >= 1.5 || readout.unit.isEmpty ? nil : 1)
-                .fixedSize(horizontal: false, vertical: true)
-                .minimumScaleFactor(0.75)
-                .accessibilityLabel("\(readout.title)，\(readout.value) \(readout.unit)")
-            if !readout.unit.isEmpty { Text(readout.unit).font(.caption).foregroundStyle(AppTheme.accent) }
-            if readout.value == "--", HomeParameterMetricDefinition.definition(for: assignment.metricId)?.source == .bms {
-                Text(bms.state != .ready ? "BMS 未连接" : freshness.level == .stale ? "数据已过期" : "等待 BMS 数据")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if assignment.metricId == "app_gps_speed", let fix = location.lastFix, let speed = fix.speedKmhForDisplay,
-               location.isUpdating, Date().timeIntervalSince(fix.timestamp) >= 0,
-               Date().timeIntervalSince(fix.timestamp) <= 10 {
+            return driving.settings.showTextDescriptions && placement.metricID == "app_range" ? rangeService.reasonText : nil
+        }()
+        // 混合来源的首页始终标明真实来源；说明开关只控制辅助说明。
+        let title = readout.title
+        return VStack(alignment: .leading, spacing: 0) {
+            AppMetricCard(title: title, value: readout.value, unit: readout.unit, detail: detail,
+                          color: metricColor(placement.metricID, snapshot: snapshot),
+                          prominent: placement.size == .hero, valueScale: driving.settings.valueScale)
+            if placement.metricID == "app_gps_speed", let speed = gpsSpeed {
                 ProgressView(value: min(1, max(0, speed) / driving.settings.powerHeaderSpeedBaseKmh))
-                    .tint(metricColor(assignment.metricId, snapshot: snapshot))
-            }
-            if driving.settings.showTextDescriptions && assignment.metricId == "app_range" {
-                Text(rangeService.reasonText).font(.caption).foregroundStyle(.secondary)
+                    .tint(metricColor(placement.metricID, snapshot: snapshot))
+                    .padding(.horizontal, 12).padding(.bottom, 12)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        // 单独的无障碍容器避免卡片标识传播覆盖内部续航按钮，保留按钮语义。
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("dashboard.slot.\(assignment.slotId)")
     }
 
-    private func parameterTitle(_ title: String) -> some View {
-        Text(driving.settings.showTextDescriptions ? title : title.components(separatedBy: " · ").last ?? title)
-            .font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var freshControllerTelemetry: MotorControllerTelemetry? {
+    private func freshControllerTelemetry(now: Date) -> MotorControllerTelemetry? {
         guard controller.state == .ready, let snapshot = controller.latestSnapshot else { return nil }
-        let age = Date().timeIntervalSince(snapshot.receivedAt)
+        let age = now.timeIntervalSince(snapshot.receivedAt)
         return age >= 0 && age <= ControllerBluetoothService.responseTimeout ? snapshot.telemetry : nil
     }
 
@@ -243,7 +125,6 @@ struct DashboardView: View {
         case .red: return AppTheme.danger
         }
     }
-
 }
 
 /// 取数只按指标来源，不按槽位原位置；控制器值仅从独立实时链路读取。
@@ -291,7 +172,8 @@ struct HomeParameterReadout: Equatable {
             if let snapshot {
                 if snapshot.chargeMOSOn == nil && snapshot.dischargeMOSOn == nil { value = "未知" }
                 else {
-                    value = "充电\(snapshot.chargeMOSOn == true ? "开" : "关") · 放电\(snapshot.dischargeMOSOn == true ? "开" : "关")"
+                    func state(_ on: Bool?) -> String { on.map { $0 ? "开" : "关" } ?? "未知" }
+                    value = "充电\(state(snapshot.chargeMOSOn)) · 放电\(state(snapshot.dischargeMOSOn))"
                 }
             }
         case "bms_soh": value = snapshot?.soh.map { String($0) } ?? "--"
@@ -324,47 +206,6 @@ struct HomeParameterReadout: Equatable {
         default: break
         }
         return Self(title: definition?.title ?? metricId, value: value, unit: value == "--" ? "" : unit)
-    }
-}
-
-private struct StatusChipsCard: View {
-    let snapshot: BmsSnapshot?
-    let isStale: Bool
-
-    var body: some View {
-        HStack(spacing: 12) {
-            chip(title: snapshot?.statusText ?? "--", color: snapshot == nil ? .secondary : AppTheme.accent)
-            chip(
-                title: mosText("充电", snapshot?.chargeMOSOn),
-                color: mosColor(snapshot?.chargeMOSOn)
-            )
-            chip(
-                title: mosText("放电", snapshot?.dischargeMOSOn),
-                color: mosColor(snapshot?.dischargeMOSOn)
-            )
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 16)
-        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .opacity(isStale ? 0.7 : 1)
-    }
-
-    private func mosText(_ prefix: String, _ on: Bool?) -> String {
-        guard let on else { return "\(prefix) MOS --" }
-        return "\(prefix) MOS \(on ? "开" : "关")"
-    }
-
-    private func mosColor(_ on: Bool?) -> Color {
-        guard let on else { return .secondary }
-        return on ? AppTheme.success : Color.secondary
-    }
-
-    private func chip(title: String, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(title).font(.caption)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
