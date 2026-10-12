@@ -16,7 +16,7 @@ concurrency:
 jobs:
   verify:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,11 +64,34 @@ jobs:
             echo "No available iPhone simulator found" >&2
             exit 1
           fi
+          mkdir -p build/test-results
           xcodebuild test \
             -project ANTuRide.xcodeproj \
             -scheme ANTuRide \
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
-            CODE_SIGNING_ALLOWED=NO
+            -resultBundlePath build/test-results/ANTuRide.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/test-results/xcodebuild.log
+
+      - name: Export simulator test diagnostics
+        if: always()
+        run: |
+          if [ -d build/test-results/ANTuRide.xcresult ]; then
+            xcrun xcresulttool get test-results summary \
+              --path build/test-results/ANTuRide.xcresult \
+              > build/test-results/summary.json || true
+            xcrun xcresulttool export attachments \
+              --path build/test-results/ANTuRide.xcresult \
+              --output-path build/test-results/attachments || true
+          fi
+
+      - name: Upload simulator test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ANTuRide-test-diagnostics
+          path: build/test-results/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build unsigned device app
         run: |

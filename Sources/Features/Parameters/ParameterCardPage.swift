@@ -55,6 +55,7 @@ struct ParameterCardPage: View {
                 Button("恢复默认", role: .destructive) { store.restoreDefaults() }
                     .accessibilityIdentifier("\(pageID).restore.confirm")
                 Button("取消", role: .cancel) {}
+                    .accessibilityIdentifier("\(pageID).restore.cancel")
             } message: {
                 Text("仅修改当前页面草稿；点击完成后保存，不影响其他 Tab 或设备参数。")
             }
@@ -171,17 +172,22 @@ struct ParameterCardPage: View {
                     Menu {
                         Button("替换参数") {
                             picker = ParameterPickerRequest(sectionID: placement.sectionID, replacementID: placement.id)
-                        }
+                        }.accessibilityIdentifier("\(pageID).action.\(placement.id).replace")
                         Button("向前移动") { moveRelative(placement, offset: -1) }
+                            .accessibilityIdentifier("\(pageID).action.\(placement.id).backward")
                         Button("向后移动") { moveRelative(placement, offset: 1) }
+                            .accessibilityIdentifier("\(pageID).action.\(placement.id).forward")
                         if store.page == .dashboard {
                             if placement.sectionID == "top" {
                                 Button("归还来源分组") { store.moveToSource(placement.id) }
+                                    .accessibilityIdentifier("\(pageID).action.\(placement.id).source")
                             } else {
                                 Button("移至重点参数") { store.moveToTop(placement.id) }
+                                    .accessibilityIdentifier("\(pageID).action.\(placement.id).top")
                             }
                         }
                         Button("隐藏参数") { store.hide(placement.id) }
+                            .accessibilityIdentifier("\(pageID).action.\(placement.id).hide")
                     } label: {
                         Label("卡片操作", systemImage: "ellipsis.circle")
                             .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)

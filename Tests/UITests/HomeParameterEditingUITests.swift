@@ -62,8 +62,9 @@ final class HomeParameterEditingUITests: XCTestCase {
         openEditor()
         app.buttons["dashboard.restore"].tap()
         XCTAssertTrue(app.buttons["dashboard.restore.confirm"].waitForExistence(timeout: 5))
-        tapUniqueHittableButton(app.buttons.matching(NSPredicate(
-            format: "label == %@ AND identifier != %@", "取消", "dashboard.cancel")), description: "取消恢复确认")
+        let cancelRestore = app.buttons["dashboard.restore.cancel"]
+        XCTAssertTrue(cancelRestore.waitForExistence(timeout: 5))
+        cancelRestore.tap()
         assertBefore("controller_rpm", "app_range", page: "dashboard")
         restore()
         assertBefore("app_gps_speed", "app_range", page: "dashboard")
@@ -291,8 +292,25 @@ final class HomeParameterEditingUITests: XCTestCase {
         let actions = grid(page).buttons.matching(identifier: "\(page).actions.\(metricID)").firstMatch
         scrollTo(actions, page: page)
         actions.tap()
-        // 原生菜单可能与背后的 sheet/编辑栏具有同名按钮，只选择唯一可点击菜单项。
-        tapUniqueHittableButton(app.buttons.matching(NSPredicate(format: "label == %@", title)), description: title)
+        let actionID = actionIdentifier(for: title, page: page, metricID: metricID)
+        let action = app.buttons[actionID]
+        XCTAssertTrue(action.waitForExistence(timeout: 5), "未找到菜单动作：\(actionID)")
+        XCTAssertTrue(action.isHittable, "菜单动作不可点击：\(actionID)")
+        action.tap()
+    }
+
+    private func actionIdentifier(for title: String, page: String, metricID: String) -> String {
+        let suffix: String
+        switch title {
+        case "替换参数": suffix = "replace"
+        case "向前移动": suffix = "backward"
+        case "向后移动": suffix = "forward"
+        case "归还来源分组": suffix = "source"
+        case "移至重点参数": suffix = "top"
+        case "隐藏参数": suffix = "hide"
+        default: XCTFail("未登记的菜单动作：\(title)"); suffix = "unknown"
+        }
+        return "\(page).action.\(metricID).\(suffix)"
     }
 
     private func replaceGPSWithRPM() {
@@ -358,40 +376,42 @@ final class HomeParameterEditingUITests: XCTestCase {
         launchIsolatedApp()
     }
 
-    private func tapUniqueHittableButton(_ query: XCUIElementQuery, description: String) {
-        let unique = NSPredicate { _, _ in
-            query.allElementsBoundByIndex.filter { $0.exists && $0.isHittable }.count == 1
-        }
-        guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: unique, object: app!)],
-                            timeout: 5) == .completed else {
-            XCTFail("未找到唯一可交互按钮：\(description)")
-            return
-        }
-        let matches = query.allElementsBoundByIndex.filter { $0.exists && $0.isHittable }
-        guard matches.count == 1 else { XCTFail("按钮存在歧义：\(description)"); return }
-        matches[0].tap()
-    }
-
     private func assertBefore(_ firstID: String, _ secondID: String, page: String) {
+        // These assertions compare adjacent cards in the leading section. Return that
+        // section to the top first so both frames are measured in the same viewport;
+        // scrolling to each card independently can hide the first card before the
+        // geometry comparison and turn a valid order into a false timeout.
+        scrollToTop(page)
         let first = metric(firstID, page: page)
         let second = metric(secondID, page: page)
-        scrollTo(first, page: page)
-        scrollTo(second, page: page)
         let ordered = NSPredicate { _, _ in
             guard first.exists, second.exists, first.isHittable, second.isHittable else { return false }
             let a = first.frame, b = second.frame
+            guard !a.isEmpty, !b.isEmpty else { return false }
             return a.minY < b.minY - 2 || (abs(a.minY - b.minY) <= 2 && a.minX < b.minX)
         }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ordered, object: app!)], timeout: 5),
-                       .completed, "实际卡片顺序应为 \(firstID) → \(secondID)")
+                       .completed, "实际卡片顺序应为 \(firstID) → \(secondID)；first=\(first.frame)，second=\(second.frame)")
+    }
+
+    private func scrollToTop(_ page: String, attempts: Int = 12) {
+        let content = grid(page)
+        for _ in 0..<attempts { content.swipeDown() }
     }
 
     private func scrollTo(_ element: XCUIElement, page: String, attempts: Int = 24) {
-        for direction in [true, false] {
-            for _ in 0..<attempts {
-                if element.exists && element.isHittable { return }
-                if direction { grid(page).swipeUp() } else { grid(page).swipeDown() }
+        let content = grid(page)
+        for _ in 0..<attempts {
+            if element.exists && element.isHittable { return }
+            guard element.exists else {
+                content.swipeUp()
+                continue
             }
+            let viewport = content.frame
+            let frame = element.frame
+            if frame.minY < viewport.minY { content.swipeDown() }
+            else if frame.maxY > viewport.maxY { content.swipeUp() }
+            else { content.swipeUp() }
         }
         XCTFail("未找到可交互元素：\(element.identifier)")
     }

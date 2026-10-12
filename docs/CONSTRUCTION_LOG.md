@@ -582,3 +582,17 @@
 
 - Run 38216253528 对应 9fafc97ab57e98f1ec4e3dd5677c5f602deba297；全部契约与 SwiftPM 通过，Xcode 仅报 Swift 6 显式捕获要求：transaction 闭包内需使用 self.parent。
 - 按编译器诊断显式写为 self.parent.reduceMotion，逻辑不变；再次 dispatch。
+
+#### 第五轮 CI 运行证据与 UI 回归修复（2026-10-12 16:00:44 +08:00）
+
+- Run 38217127984 精确对应 88fee9596e12030286d61f0f2cad9ffbb2dfa84c，已成功编译模拟器 target；469 个 XCTest 零失败（含全部新域/App 测试和 5 个 UIKit frame 布局测试），ANTuRideUITests 13/13 通过。
+- HomeParameterEditingUITests 已通过最大辅助字号横屏三页可达、无数据故障卡隐藏/添加、菜单实际排序与重启持久化、来源归还/添加去重、真正长按拖动及重启顺序。
+- 暴露两个 UI 查询问题：大卡顺序断言要求两卡同时 hittable；菜单唯一可点击查询的成功等待与再次枚举存在 TOCTOU。尚余用例未跑完，30 分钟 job 时限触发取消，未产出 IPA。
+- 给原生菜单动作稳定 page/metric/action identifier，修复 UI 几何/菜单等待与滚动查找；完整测试仍为打包必经门禁，不跳过、不改为 continue-on-error。
+- CI 时限调整为 60 分钟，并保留 resultBundle、xcodebuild 日志、summary 与附件诊断，以便异常有确切运行证据。
+
+#### 第六轮 UI 回归修复与可诊断 CI（2026-10-12 16:55:20 +08:00）
+
+- 在页面菜单动作上增加稳定的 page/metric/action accessibilityIdentifier，并为恢复确认取消增加独立标识；XCUITest 不再通过同名中文 label 全局枚举菜单动作，避免编辑栏、sheet 与菜单之间的查询竞争。
+- 排序断言先把当前参数网格回滚到顶部，再在同一视口测量两张卡；保留两卡同时可见、非空 frame 和实际几何顺序约束，不以放宽断言换取通过。
+- CI simulator test 延长至 60 分钟，并上传 .xcresult、xcodebuild 日志、summary/附件诊断；失败仍阻断后续设备构建，不跳过测试。
