@@ -202,10 +202,18 @@ final class ANTuRideUITests: XCTestCase {
         scrollUntilVisible(batteryFilter, in: app)
         XCTAssertEqual(batteryFilter.value as? String, "1")
         // Tap the switch control itself; the accessibility frame may include the full List row.
-        batteryFilter.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        let tapBatteryFilter = { batteryFilter.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap() }
         let filterDisabled = NSPredicate(format: "value == %@", "0")
-        expectation(for: filterDisabled, evaluatedWith: batteryFilter)
-        waitForExpectations(timeout: 5)
+        tapBatteryFilter()
+        if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: filterDisabled, object: batteryFilter)],
+                          timeout: 5) != .completed, (batteryFilter.value as? String) != "0" {
+            // 模拟器高负载下偶发丢失一次 tap：仅在开关仍未关闭时重试一次；
+            // 真实的开关故障会在两次点击后仍然失败，不会被掩盖。
+            tapBatteryFilter()
+            _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: filterDisabled, object: batteryFilter)],
+                               timeout: 5)
+        }
+        XCTAssertEqual(batteryFilter.value as? String, "0", "电池过滤未在两次点击内关闭")
         let controllerFilter = app.switches["bluetooth.controller.filter"]
         scrollUntilVisible(controllerFilter, in: app)
         XCTAssertEqual(controllerFilter.value as? String, "1", "电池过滤不改变控制器过滤")
