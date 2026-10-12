@@ -73,7 +73,7 @@ struct DashboardView: View {
         let telemetry = freshControllerTelemetry(now: now)
         let readout = HomeParameterReadout.read(
             metricId: placement.metricID, snapshot: snapshot, gpsSpeedKmh: gpsSpeed,
-            rangeKm: rangeService.status == .valid ? rangeService.rangeKm : nil,
+            rangeKm: rangeService.status == .valid ? rangeService.prediction?.predictedRangeKm : nil,
             consumptionWhPerKm: rangeService.status == .valid ? rangeService.effectiveWhPerKm : nil,
             controller: telemetry, settings: driving.settings,
             averageSpeedKmh: rangeService.averageSpeedKmh, referenceKmPerAh: rangeService.referenceKmPerAh,

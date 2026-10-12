@@ -38,6 +38,8 @@ class DashboardSourceContracts(unittest.TestCase):
 
     def test_range_entry_restores_detail_navigation(self):
         self.assertIn("RangeView()", self.dashboard)
+        self.assertIn("rangeService.prediction?.predictedRangeKm", self.dashboard)
+        self.assertNotIn("rangeService.rangeKm", self.dashboard)
         self.assertIn(".toolbar(.visible, for: .navigationBar)", self.dashboard)
         self.assertIn('accessibilityIdentifier("dashboard.range")', self.dashboard)
         self.assertNotIn("ToolbarItem", self.dashboard)

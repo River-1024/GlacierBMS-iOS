@@ -561,3 +561,9 @@
 - 再次验证五项 Python 静态契约 50/50 通过，git diff --check 通过；已核验 GitHub CLI 认证、远端与 feature 分支。
 - 提交参数卡实现、原生编辑/排序、来源归还及迁移、82 个新增域/App 测试与 UI 回归、设计/施工文档及 CI 静态门禁。
 - 将明确 dispatch 当前 feature 分支，并核验 run headSha；Xcode 编译、XCTest/XCUITest 和 unsigned IPA 验证在此记录时仍待 CI。失败将修复并重跑，不以旧 CI 证明新改动。
+
+#### 首轮 CI 编译修复（2026-10-12 14:53:36 +08:00）
+
+- Run 38214557408 对应 a9d3d3b1bc6a6e494091bc5cf97f229c59fda732；静态检查和 SwiftPM 通过，模拟器 target 编译失败，未执行 XCTest/XCUITest 或打包。
+- Dashboard 重构误引用不存在的 RangeService.rangeKm，修正为既有 prediction?.predictedRangeKm；继续保留 status == .valid 的有效性门禁，新增静态回归断言。
+- 历史 run 38208098933 的旧编辑页恢复默认 UI 失败仅作为历史背景，不作为本轮验证依据。继续提交修复、dispatch 准确新 SHA。
