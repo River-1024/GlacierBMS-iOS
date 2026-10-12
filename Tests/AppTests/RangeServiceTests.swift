@@ -814,6 +814,8 @@ final class RangeServiceTests: XCTestCase {
             XCTAssertTrue(service.updateNominalCapacityAh(80))
             trajectory(service, clock, seconds: 30)
             let whB = service.accumulatedNetWh
+            // 真实冷恢复的前置：BLE 断开（断连会 flush 完整驾驶证据，不受节流持久化截断）。
+            service.setConnectionReady(false)
             clock.advance(3_600)
 
             let restored = RangeService(defaults: clock.defaults, clock: { clock.date })
@@ -947,7 +949,7 @@ final class RangeServiceTests: XCTestCase {
             for second in stride(from: 10, through: 180, by: 10) {
                 clock.advance(10)
                 service.ingest(snapshot: snapshot(clock.date, current: 15, remainingAh: 50 - Double(second) * 0.02))
-                service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.0018))
+                service.ingest(fix: fix(clock.date, longitude: Double(second) * 0.00018))
             }
             clock.advance(5)
             service.ingest(snapshot: snapshot(clock.date, current: 15, remainingAh: 46.3))
