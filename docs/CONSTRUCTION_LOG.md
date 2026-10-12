@@ -577,3 +577,8 @@
 #### 第三轮 CI 编译修复记录（2026-10-12 15:10:05 +08:00）
 
 - 补正上一轮修复中的文本替换残留，NativeParameterGrid 现在只使用合法的 transaction 条件修改，不写入只读 EnvironmentValues；减少动态效果仍由系统环境决定。
+
+#### 第四轮 CI 编译修复记录（2026-10-12 15:19:45 +08:00）
+
+- Run 38216253528 对应 9fafc97ab57e98f1ec4e3dd5677c5f602deba297；全部契约与 SwiftPM 通过，Xcode 仅报 Swift 6 显式捕获要求：transaction 闭包内需使用 self.parent。
+- 按编译器诊断显式写为 self.parent.reduceMotion，逻辑不变；再次 dispatch。

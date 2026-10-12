@@ -271,7 +271,7 @@ struct NativeParameterGrid: UIViewRepresentable {
                 .environment(\.colorScheme, parent.colorScheme)
                 .environment(\.layoutDirection, parent.layoutDirection)
                 .transaction { transaction in
-                    if parent.reduceMotion {
+                    if self.parent.reduceMotion {
                         transaction.animation = nil
                         transaction.disablesAnimations = true
                     }
