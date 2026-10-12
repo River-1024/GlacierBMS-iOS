@@ -404,10 +404,9 @@ final class HomeParameterEditingUITests: XCTestCase {
     }
 
     private func scrollToTop(_ page: String, attempts: Int = 12) {
-        let content = grid(page)
-        // XCTest has no reliable contentOffset API. A bounded rewind is more
-        // predictable than inferring the boundary from a virtualized first cell.
-        for _ in 0..<attempts { content.swipeDown() }
+        // XCTest has no reliable contentOffset API. Rewind inside the visible
+        // grid, away from screen edges that open Notification Center in landscape.
+        for _ in 0..<attempts { scrollGrid(page, upward: false) }
     }
 
     private func scrollTo(_ element: XCUIElement, page: String, attempts: Int = 24) {
@@ -415,12 +414,32 @@ final class HomeParameterEditingUITests: XCTestCase {
         // Always begin from a known visual boundary. This handles cards that move
         // between source/top sections and virtualized cells that do not exist yet.
         scrollToTop(page, attempts: min(attempts, 12))
-        let content = grid(page)
         for _ in 0..<attempts {
             if element.exists && element.isHittable { return }
-            content.swipeUp()
+            scrollGrid(page, upward: true)
         }
-        XCTFail("未找到可交互元素；page=\(page)")
+        // The final gesture can bring the target into view too.
+        if element.exists && element.isHittable { return }
+        XCTFail("未找到可交互元素；page=\(page)，identifier=\(element.identifier)")
+    }
+
+    private func scrollGrid(_ page: String, upward: Bool) {
+        let content = grid(page)
+        let frame = content.frame
+        let visible = frame.intersection(app.frame).insetBy(dx: 16, dy: 16)
+        guard !visible.isNull, visible.width > 0, visible.height > 0 else {
+            XCTFail("网格没有可滚动的可见区域；page=\(page)")
+            return
+        }
+        let origin = content.coordinate(withNormalizedOffset: .zero)
+        let upper = origin.withOffset(CGVector(dx: visible.midX - frame.minX,
+                                               dy: visible.minY + visible.height * 0.25 - frame.minY))
+        let lower = origin.withOffset(CGVector(dx: visible.midX - frame.minX,
+                                               dy: visible.minY + visible.height * 0.75 - frame.minY))
+        // A short press scrolls; it must not activate the long-press reorder path.
+        let start = upward ? lower : upper
+        let end = upward ? upper : lower
+        start.press(forDuration: 0.01, thenDragTo: end)
     }
 
     private func scrollPickerTo(_ element: XCUIElement) {
