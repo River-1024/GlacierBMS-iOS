@@ -24,15 +24,15 @@ struct RangeSettingsView: View {
                         Text("\(minutes) 分钟").tag(minutes)
                     }
                 }
+                .onChange(of: windowMinutes) { _ in saveRangeSettings() }
                 .accessibilityIdentifier("range.window")
                 Picker("预测刷新", selection: $refreshSeconds) {
                     ForEach(DrivingSettings.rangeRefreshSecondsBounds, id: \.self) { seconds in
                         Text("每 \(seconds) 秒").tag(seconds)
                     }
                 }
+                .onChange(of: refreshSeconds) { _ in saveRangeSettings() }
                 .accessibilityIdentifier("range.refresh")
-                Button("保存窗口与刷新") { saveRangeSettings() }
-                    .accessibilityIdentifier("range.save.settings")
                 Button("恢复窗口与刷新默认值", role: .destructive) {
                     confirmingRestoreDefaults = true
                 }
@@ -49,7 +49,7 @@ struct RangeSettingsView: View {
             } header: {
                 Text("窗口与刷新")
             } footer: {
-                Text("窗口和刷新为全局偏好，所有设备共用；总容量自动读取当前 BMS，不需要手动设置。窗口按累计有效驾驶时长保留证据，停车不推进；数据过期、停车充电和保护状态会立即撤下续航。结果和导出在「仪表盘 → 综合续航」查看。")
+                Text("窗口和刷新为全局偏好，所有设备共用；修改后立即保存。总容量自动读取当前 BMS，不需要手动设置。窗口按累计有效驾驶时长保留证据，停车不推进；数据过期、停车充电和保护状态会立即撤下续航。结果和导出在「仪表盘 → 综合续航」查看。")
             }
 
             Section {

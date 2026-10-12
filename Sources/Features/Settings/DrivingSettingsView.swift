@@ -12,7 +12,7 @@ extension DrivingSettings {
     }
 }
 
-/// 主线程接入点：在 App 根部持有同一个 store，观察 $settings 或使用页面 onSave。
+/// 主线程接入点：在 App 根部持有同一个 store，页面通过字段级保存更新同一份设置快照。
 /// UserDefaults key: driving_settings_v1（JSON Data）；仅写此键，不碰服务保存的外设 UUID。
 /// 首次接入应读取 settings；每次保存后再由主线程将偏好应用到各消费端。
 /// 本类/页面不执行蓝牙连接、查询、硬件写入、主题切换或续航算法配置。
@@ -95,37 +95,34 @@ final class DrivingSettingsStore: ObservableObject {
     func restoreDefaults() throws { try save(.defaults) }
 }
 
-/// 驾驶与显示偏好的草稿页面。未保存的输入不写 UserDefaults；返回页面不会隐式保存。
-/// 接入示例（主线程）：DrivingSettingsView(store: store) { settings in /* 应用偏好 */ }
+/// 驾驶与显示偏好页面。每项设置在修改完成后立即保存；不会写入 BMS 或控制器硬件。
 /// App/Root 已消费主题和 BMS 查询周期；连接策略在蓝牙设备页编辑，续航周期在续航设置编辑。
 /// 字号/描述/功率图/阈值/探头选择由 Dashboard 单独消费，连接开关在蓝牙设备页编辑。
 /// 控制器采样周期不属于本页。
-/// 横竖屏锁需要 UIApplication/scene 方向策略，故不提供伪有效的开关。
 @MainActor
 struct DrivingSettingsView: View {
     @StateObject private var store: DrivingSettingsStore
-    @State private var draft: DrivingSettings
     @State private var numericText: [String: String]
+    @State private var temperatureSourceText: String
     @State private var validationErrors: [String] = []
     @State private var confirmingReset = false
+    @State private var editingField: String?
     @FocusState private var focusedField: String?
-    private let onSave: (DrivingSettings) -> Void
 
-    init(store: DrivingSettingsStore, onSave: @escaping (DrivingSettings) -> Void = { _ in }) {
+    init(store: DrivingSettingsStore) {
         _store = StateObject(wrappedValue: store)
-        _draft = State(initialValue: store.settings)
         _numericText = State(initialValue: Self.textValues(for: store.settings))
-        self.onSave = onSave
+        _temperatureSourceText = State(initialValue: store.settings.temperatureSource)
     }
 
-    init(defaults: UserDefaults = .standard, onSave: @escaping (DrivingSettings) -> Void = { _ in }) {
-        self.init(store: DrivingSettingsStore(defaults: defaults), onSave: onSave)
+    init(defaults: UserDefaults = .standard) {
+        self.init(store: DrivingSettingsStore(defaults: defaults))
     }
 
     var body: some View {
         Form {
             Section {
-                Text("本页管理驾驶与显示偏好，不写 BMS 或控制器硬件配置。App 已接入主题、BMS 查询周期；自动连接请在蓝牙设备中设置，续航窗口和刷新请在续航设置中编辑。保存不代表设备连接成功。")
+                Text("本页设置会在每项修改完成后自动保存并应用到本机。不写入 BMS 或控制器硬件；保存设置也不会主动连接设备。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -137,24 +134,25 @@ struct DrivingSettingsView: View {
                 Text("BMS 查询周期 100–60000 ms。控制器独立查询周期不在此修改；续航窗口和刷新仅在续航设置中编辑。")
             }
             Section {
-                Picker("主题", selection: $draft.appThemeMode) {
+                Picker("主题", selection: binding(for: \.appThemeMode)) {
                     Text("跟随系统").tag(DrivingSettings.ThemeMode.system)
                     Text("浅色").tag(DrivingSettings.ThemeMode.light)
                     Text("深色").tag(DrivingSettings.ThemeMode.dark)
                 }
                 ForEach(Self.scaleFields) { numericRow($0) }
-                Toggle("首页显示文字描述", isOn: $draft.showTextDescriptions)
-                Picker("默认功率图", selection: $draft.defaultPowerDisplayMode) {
+                Toggle("首页显示文字描述", isOn: binding(for: \.showTextDescriptions))
+                Picker("默认功率图", selection: binding(for: \.defaultPowerDisplayMode)) {
                     Text("功率条").tag(DrivingSettings.PowerDisplayMode.powerBar)
                     Text("实时曲线").tag(DrivingSettings.PowerDisplayMode.curve)
                 }
-                TextField("温度来源", text: $draft.temperatureSource)
+                TextField("温度来源", text: $temperatureSourceText)
                     .focused($focusedField, equals: "temperatureSource")
+                    .onSubmit { commitTemperatureSource() }
                     .accessibilityIdentifier("driving.temperatureSource")
             } header: {
                 Text("显示偏好")
             } footer: {
-                Text("字号比例 0.5–2.0，仅表示数值大小。温度来源默认“自动”，也可输入探头序号（从 1 开始）；实际探头选择与越界回退需遥测消费端接入。")
+                Text("字号比例 0.5–2.0，仅表示数值大小。温度来源默认“自动”，也可输入探头序号（从 1 开始）；实际探头选择与越界回退需遥测消费端接入。修改完成后自动保存。")
             }
             Section {
                 ForEach(Self.powerFields) { numericRow($0) }
@@ -175,14 +173,14 @@ struct DrivingSettingsView: View {
             } header: {
                 Text("温度颜色阈值")
             } footer: {
-                Text("范围 -50–150 °C，绿色上限 ≤ 黄色上限；不是 BMS 温度保护设置。")
+                Text("范围 -50–150 °C，绿色上限 ≤ 黄色上限。")
             }
             Section {
                 ForEach(Self.differenceFields) { numericRow($0) }
             } header: {
                 Text("压差颜色阈值")
             } footer: {
-                Text("压差为非负 mV，绿色上限 ≤ 黄色上限。安卓未设置额外上限。")
+                Text("单位 mV，绿色上限 ≤ 黄色上限。")
             }
             Section {
                 ForEach(Self.speedFields) { numericRow($0) }
@@ -198,44 +196,64 @@ struct DrivingSettingsView: View {
                 if let notice = store.notice {
                     Text(notice).font(.caption).foregroundStyle(.secondary)
                 }
-                Button("保存本机驾驶与显示设置") { saveDraft() }
-                    .accessibilityIdentifier("driving.save")
-                Button("撤销未保存修改") { reloadDraft() }
                 Button("恢复驾驶与显示默认值", role: .destructive) {
+                    commitPendingTextFields()
                     focusedField = nil
                     confirmingReset = true
                 }
                 .accessibilityIdentifier("driving.restoreDefaults")
             } footer: {
-                Text("恢复默认仅重置本页驾驶与显示偏好，保留蓝牙自动连接开关、续航周期、首页布局、外设 UUID、设备容量、行程和日志。不控制全局横竖屏。")
+                Text("恢复默认会立即保存，仅重置本页驾驶与显示偏好；保留蓝牙自动连接开关、续航周期、首页布局、外设 UUID、设备容量、行程和日志。不控制全局横竖屏。")
             }
         }
         .navigationTitle("驾驶与显示设置")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             store.reload()
-            reloadDraft()
+            reloadTextValues()
+        }
+        .onChange(of: focusedField) { newValue in
+            if let previous = editingField, previous != newValue {
+                commitTextField(previous)
+            }
+            editingField = newValue
         }
         .confirmationDialog("恢复驾驶与显示默认值？", isPresented: $confirmingReset, titleVisibility: .visible) {
             Button("恢复并保存默认值", role: .destructive) {
                 do {
                     try store.restoreDrivingPreferencesDefaults()
-                    reloadDraft()
-                    onSave(store.settings)
+                    reloadTextValues()
                 } catch {
                     validationErrors = [error.localizedDescription]
                 }
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("仅覆盖本页驾驶与显示偏好和当前草稿，保留两个自动连接开关和续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。本页不会执行连接。")
+            Text("仅覆盖本页驾驶与显示偏好，保留两个自动连接开关和续航窗口/刷新、首页布局、外设 UUID、设备容量、行程和日志。本页不会执行连接。")
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("完成") { focusedField = nil }
+                Button("完成") {
+                    commitPendingTextFields()
+                    focusedField = nil
+                }
             }
         }
+        .onDisappear {
+            commitPendingTextFields()
+        }
+    }
+
+    private func binding<Value>(for keyPath: WritableKeyPath<DrivingSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { store.settings[keyPath: keyPath] },
+            set: { newValue in
+                var candidate = store.settings
+                candidate[keyPath: keyPath] = newValue
+                save(candidate)
+            }
+        )
     }
 
     private func numericRow(_ field: NumericField) -> some View {
@@ -243,54 +261,73 @@ struct DrivingSettingsView: View {
             Text(field.title)
             Spacer()
             TextField(field.title, text: Binding(
-                get: { numericText[field.id] ?? "" },
+                get: { numericText[field.id] ?? field.text(in: store.settings) },
                 set: { numericText[field.id] = $0 }
             ))
             .keyboardType(field.isInteger ? .numberPad : .numbersAndPunctuation)
             .multilineTextAlignment(.trailing)
             .frame(minWidth: 75, maxWidth: 130)
             .focused($focusedField, equals: field.id)
+            .onSubmit { commitTextField(field.id) }
             .accessibilityIdentifier("driving.\(field.id)")
         }
     }
 
-    private func reloadDraft() {
-        focusedField = nil
-        draft = store.settings
-        numericText = Self.textValues(for: draft)
-        validationErrors = []
+    private func commitPendingTextFields() {
+        if let editingField {
+            commitTextField(editingField)
+        }
     }
 
-    private func saveDraft() {
-        focusedField = nil
-        var candidate = draft
-        var errors: [String] = []
-        for field in Self.allFields {
-            if let error = field.apply(numericText[field.id] ?? "", to: &candidate) {
-                errors.append(error)
-            }
-        }
-        // 不因某个输入解析失败而用草稿旧值保存。
-        guard errors.isEmpty else {
-            validationErrors = errors
+    private func commitTextField(_ id: String) {
+        if id == "temperatureSource" {
+            commitTemperatureSource()
             return
         }
+        guard let field = Self.allFields.first(where: { $0.id == id }) else { return }
+        var candidate = store.settings
+        guard let error = field.apply(numericText[id] ?? "", to: &candidate) else {
+            if save(candidate) {
+                numericText[id] = field.text(in: store.settings)
+            }
+            return
+        }
+        validationErrors = [error]
+    }
+
+    private func commitTemperatureSource() {
+        var candidate = store.settings
+        candidate.temperatureSource = temperatureSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if save(candidate) {
+            temperatureSourceText = store.settings.temperatureSource
+        }
+    }
+
+    @discardableResult
+    private func save(_ candidate: DrivingSettings) -> Bool {
         do {
             try store.saveDrivingPreferences(candidate)
-            reloadDraft()
-            onSave(store.settings)
+            validationErrors = []
+            return true
         } catch let error as DrivingSettings.ValidationError {
             validationErrors = error.messages
+            return false
         } catch {
             validationErrors = [error.localizedDescription]
+            return false
         }
+    }
+
+    private func reloadTextValues() {
+        numericText = Self.textValues(for: store.settings)
+        temperatureSourceText = store.settings.temperatureSource
+        validationErrors = []
     }
 
     private static func textValues(for settings: DrivingSettings) -> [String: String] {
         Dictionary(uniqueKeysWithValues: allFields.map { ($0.id, $0.text(in: settings)) })
     }
 
-    /// 输入保留为文本草稿，使空值、负温度、小数及非法输入可见，保存时再严格解析。
     private struct NumericField: Identifiable {
         enum ValuePath {
             case integer(WritableKeyPath<DrivingSettings, Int>)
@@ -316,7 +353,6 @@ struct DrivingSettingsView: View {
                 guard let value = Int(trimmed) else { return "\(title)必须是整数。" }
                 settings[keyPath: key] = value
             case .decimal(let key):
-                // 支持点号及小数逗号，不接受分组符号或非有限数值。
                 guard let value = Double(trimmed.replacingOccurrences(of: ",", with: ".")), value.isFinite else {
                     return "\(title)必须是有限数字（不使用千位分隔符）。"
                 }
@@ -327,33 +363,33 @@ struct DrivingSettingsView: View {
     }
 
     private static let cadenceFields: [NumericField] = [
-        .init(id: "bluetoothRefreshIntervalMs", title: "BMS 查询（ms）", path: .integer(\DrivingSettings.bluetoothRefreshIntervalMs))
+        .init(id: "bluetoothRefreshIntervalMs", title: "BMS 查询（ms）", path: .integer(\.bluetoothRefreshIntervalMs))
     ]
     private static let scaleFields: [NumericField] = [
-        .init(id: "valueScale", title: "数值字号比例", path: .decimal(\DrivingSettings.valueScale))
+        .init(id: "valueScale", title: "数值字号比例", path: .decimal(\.valueScale))
     ]
     private static let powerFields: [NumericField] = [
-        .init(id: "dischargeBaseW", title: "放电基数（W）", path: .decimal(\DrivingSettings.dischargeBaseW)),
-        .init(id: "chargeBaseW", title: "充电基数（W）", path: .decimal(\DrivingSettings.chargeBaseW)),
-        .init(id: "powerYellowStart", title: "黄色起点（0–1）", path: .decimal(\DrivingSettings.powerYellowStart)),
-        .init(id: "powerRedStart", title: "红色起点（0–1）", path: .decimal(\DrivingSettings.powerRedStart))
+        .init(id: "dischargeBaseW", title: "放电基数（W）", path: .decimal(\.dischargeBaseW)),
+        .init(id: "chargeBaseW", title: "充电基数（W）", path: .decimal(\.chargeBaseW)),
+        .init(id: "powerYellowStart", title: "黄色起点（0–1）", path: .decimal(\.powerYellowStart)),
+        .init(id: "powerRedStart", title: "红色起点（0–1）", path: .decimal(\.powerRedStart))
     ]
     private static let socFields: [NumericField] = [
-        .init(id: "socRedUpperPercent", title: "红色上限（%）", path: .decimal(\DrivingSettings.socRedUpperPercent)),
-        .init(id: "socYellowUpperPercent", title: "黄色上限（%）", path: .decimal(\DrivingSettings.socYellowUpperPercent))
+        .init(id: "socRedUpperPercent", title: "红色上限（%）", path: .decimal(\.socRedUpperPercent)),
+        .init(id: "socYellowUpperPercent", title: "黄色上限（%）", path: .decimal(\.socYellowUpperPercent))
     ]
     private static let temperatureFields: [NumericField] = [
-        .init(id: "tempGreenUpperC", title: "绿色上限（°C）", path: .decimal(\DrivingSettings.tempGreenUpperC)),
-        .init(id: "tempYellowUpperC", title: "黄色上限（°C）", path: .decimal(\DrivingSettings.tempYellowUpperC))
+        .init(id: "tempGreenUpperC", title: "绿色上限（°C）", path: .decimal(\.tempGreenUpperC)),
+        .init(id: "tempYellowUpperC", title: "黄色上限（°C）", path: .decimal(\.tempYellowUpperC))
     ]
     private static let differenceFields: [NumericField] = [
-        .init(id: "diffGreenUpperMv", title: "绿色上限（mV）", path: .decimal(\DrivingSettings.diffGreenUpperMv)),
-        .init(id: "diffYellowUpperMv", title: "黄色上限（mV）", path: .decimal(\DrivingSettings.diffYellowUpperMv))
+        .init(id: "diffGreenUpperMv", title: "绿色上限（mV）", path: .decimal(\.diffGreenUpperMv)),
+        .init(id: "diffYellowUpperMv", title: "黄色上限（mV）", path: .decimal(\.diffYellowUpperMv))
     ]
     private static let speedFields: [NumericField] = [
-        .init(id: "powerHeaderSpeedBaseKmh", title: "满格速度（km/h）", path: .decimal(\DrivingSettings.powerHeaderSpeedBaseKmh)),
-        .init(id: "powerHeaderSpeedMidKmh", title: "中速阈值（km/h）", path: .decimal(\DrivingSettings.powerHeaderSpeedMidKmh)),
-        .init(id: "powerHeaderSpeedHighKmh", title: "高速阈值（km/h）", path: .decimal(\DrivingSettings.powerHeaderSpeedHighKmh))
+        .init(id: "powerHeaderSpeedBaseKmh", title: "满格速度（km/h）", path: .decimal(\.powerHeaderSpeedBaseKmh)),
+        .init(id: "powerHeaderSpeedMidKmh", title: "中速阈值（km/h）", path: .decimal(\.powerHeaderSpeedMidKmh)),
+        .init(id: "powerHeaderSpeedHighKmh", title: "高速阈值（km/h）", path: .decimal(\.powerHeaderSpeedHighKmh))
     ]
     private static var allFields: [NumericField] {
         cadenceFields + scaleFields + powerFields + socFields + temperatureFields + differenceFields + speedFields

@@ -31,6 +31,18 @@ class SettingsSourceContracts(unittest.TestCase):
                      "AccelerationView", "ControllerHistoryView", "LogViewerView"):
             self.assertEqual(hub.count(page + "("), 1, page)
 
+    def test_settings_save_immediately_and_keep_defaults_only(self):
+        driving = source("Sources/Features/Settings/DrivingSettingsView.swift")
+        range_settings = source("Sources/Features/Settings/RangeSettingsView.swift")
+        self.assertNotIn("撤销未保存修改", driving)
+        self.assertNotIn("保存本机驾驶与显示设置", driving)
+        self.assertIn("driving.restoreDefaults", driving)
+        self.assertNotIn("保存窗口与刷新", range_settings)
+        self.assertNotIn("range.save.settings", range_settings)
+        self.assertIn("range.restoreDefaults", range_settings)
+        self.assertIn("onChange(of: windowMinutes)", range_settings)
+        self.assertIn("onChange(of: refreshSeconds)", range_settings)
+        self.assertIn("onSubmit", driving)
     def test_range_editors_not_duplicated_in_driving(self):
         driving = source("Sources/Features/Settings/DrivingSettingsView.swift")
         page = driving.split("struct DrivingSettingsView: View", 1)[1]
