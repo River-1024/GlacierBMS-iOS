@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: Build IPA only; skip automated tests and simulator diagnostics
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,21 +44,27 @@ jobs:
         run: xcodegen generate
 
       - name: Check settings source contracts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_settings_contract.py
 
       - name: Check dashboard source contracts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_dashboard_contract.py
 
       - name: Check parameter card source contracts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_parameter_cards_contract.py
 
       - name: Check Bluetooth separation source contracts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_bluetooth_contract.py
 
       - name: Check range source contracts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_range_contract.py
 
       - name: Run Swift package tests
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: swift test
 
       - name: Build unsigned device app
@@ -98,6 +109,7 @@ jobs:
           retention-days: 7
 
       - name: Run iOS simulator tests
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: |
           set -euo pipefail
           DEVICE_ID="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ && /Booted|Shutdown/ { print $2; exit }')"
@@ -114,7 +126,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/test-results/xcodebuild.log
 
       - name: Export simulator test diagnostics
-        if: always()
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.build_only) }}
         run: |
           if [ -d build/test-results/ANTuRide.xcresult ]; then
             xcrun xcresulttool get test-results summary \
@@ -126,7 +138,7 @@ jobs:
           fi
 
       - name: Upload simulator test diagnostics
-        if: always()
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.build_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: ANTuRide-test-diagnostics
