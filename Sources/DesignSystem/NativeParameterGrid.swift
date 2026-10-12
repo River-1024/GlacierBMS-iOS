@@ -280,6 +280,7 @@ struct NativeParameterGrid: UIViewRepresentable {
 
         private func configure(_ cell: UICollectionViewCell, id: String) {
             cell.backgroundColor = .clear
+            cell.accessibilityIdentifier = "\(parent.accessibilityIdentifier).item.\(id)"
             cell.isAccessibilityElement = false
             cell.contentConfiguration = UIHostingConfiguration { hosted(parent.content(id)) }
                 .margins(.all, 0)

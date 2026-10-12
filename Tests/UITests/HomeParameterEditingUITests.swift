@@ -377,43 +377,56 @@ final class HomeParameterEditingUITests: XCTestCase {
     }
 
     private func assertBefore(_ firstID: String, _ secondID: String, page: String) {
-        // These assertions compare adjacent cards in the leading section. Return that
-        // section to the top first so both frames are measured in the same viewport;
-        // scrolling to each card independently can hide the first card before the
-        // geometry comparison and turn a valid order into a false timeout.
         scrollToTop(page)
-        let first = metric(firstID, page: page)
-        let second = metric(secondID, page: page)
+        // Stable native menu buttons mark the start of each card. Generic SwiftUI
+        // containers can be retyped/recreated when telemetry refreshes or a Tab
+        // becomes active; do not cache their resolved accessibility element type.
+        var frames: (CGRect, CGRect)?
         let ordered = NSPredicate { _, _ in
-            guard first.exists, second.exists, first.isHittable, second.isHittable else { return false }
+            let first = self.grid(page).buttons["\(page).actions.\(firstID)"]
+            let second = self.grid(page).buttons["\(page).actions.\(secondID)"]
+            guard first.exists, second.exists else { return false }
             let a = first.frame, b = second.frame
-            guard !a.isEmpty, !b.isEmpty else { return false }
+            frames = (a, b)
+            let viewport = self.grid(page).frame
+            guard !a.isEmpty, !b.isEmpty, viewport.intersects(a), viewport.intersects(b) else { return false }
             return a.minY < b.minY - 2 || (abs(a.minY - b.minY) <= 2 && a.minX < b.minX)
         }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ordered, object: app!)], timeout: 5),
-                       .completed, "实际卡片顺序应为 \(firstID) → \(secondID)；first=\(first.frame)，second=\(second.frame)")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ordered, object: app!)], timeout: 10),
+                       .completed, "实际卡片顺序应为 \(firstID) → \(secondID)；frames=\(String(describing: frames))")
     }
 
-    private func scrollToTop(_ page: String, attempts: Int = 12) {
+    private func scrollPosition(_ content: XCUIElement) -> String {
+        let firstCell = content.cells.firstMatch
+        guard firstCell.exists else { return "empty" }
+        return "\(firstCell.identifier):\(Int(firstCell.frame.minY.rounded()))"
+    }
+
+    private func scrollToTop(_ page: String, attempts: Int = 24) {
         let content = grid(page)
-        for _ in 0..<attempts { content.swipeDown() }
+        for _ in 0..<attempts {
+            let before = scrollPosition(content)
+            content.swipeDown()
+            if scrollPosition(content) == before { return }
+        }
+        XCTFail("网格未到达顶部：\(page)")
     }
 
     private func scrollTo(_ element: XCUIElement, page: String, attempts: Int = 24) {
+        if element.exists && element.isHittable { return }
+        // A moved card may now be above the virtualized viewport and not exist in
+        // the accessibility tree. Seek from a known boundary, never blindly assume
+        // that a missing item is below the current position.
+        scrollToTop(page, attempts: attempts)
         let content = grid(page)
         for _ in 0..<attempts {
             if element.exists && element.isHittable { return }
-            guard element.exists else {
-                content.swipeUp()
-                continue
-            }
-            let viewport = content.frame
-            let frame = element.frame
-            if frame.minY < viewport.minY { content.swipeDown() }
-            else if frame.maxY > viewport.maxY { content.swipeUp() }
-            else { content.swipeUp() }
+            let before = scrollPosition(content)
+            content.swipeUp()
+            if scrollPosition(content) == before { break }
         }
-        XCTFail("未找到可交互元素：\(element.identifier)")
+        if element.exists && element.isHittable { return }
+        XCTFail("未找到可交互元素；page=\(page)")
     }
 
     private func scrollPickerTo(_ element: XCUIElement) {
