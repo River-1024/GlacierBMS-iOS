@@ -403,36 +403,23 @@ final class HomeParameterEditingUITests: XCTestCase {
                        .completed, "实际卡片顺序应为 \(firstID) → \(secondID)；frames=\(String(describing: frames))")
     }
 
-    private func scrollPosition(_ content: XCUIElement) -> String {
-        let firstCell = content.cells.firstMatch
-        guard firstCell.exists else { return "empty" }
-        return "\(firstCell.identifier):\(Int(firstCell.frame.minY.rounded()))"
-    }
-
-    private func scrollToTop(_ page: String, attempts: Int = 24) {
+    private func scrollToTop(_ page: String, attempts: Int = 12) {
         let content = grid(page)
-        for _ in 0..<attempts {
-            let before = scrollPosition(content)
-            content.swipeDown()
-            if scrollPosition(content) == before { return }
-        }
-        XCTFail("网格未到达顶部：\(page)")
+        // XCTest has no reliable contentOffset API. A bounded rewind is more
+        // predictable than inferring the boundary from a virtualized first cell.
+        for _ in 0..<attempts { content.swipeDown() }
     }
 
     private func scrollTo(_ element: XCUIElement, page: String, attempts: Int = 24) {
         if element.exists && element.isHittable { return }
-        // A moved card may now be above the virtualized viewport and not exist in
-        // the accessibility tree. Seek from a known boundary, never blindly assume
-        // that a missing item is below the current position.
-        scrollToTop(page, attempts: attempts)
+        // Always begin from a known visual boundary. This handles cards that move
+        // between source/top sections and virtualized cells that do not exist yet.
+        scrollToTop(page, attempts: min(attempts, 12))
         let content = grid(page)
         for _ in 0..<attempts {
             if element.exists && element.isHittable { return }
-            let before = scrollPosition(content)
             content.swipeUp()
-            if scrollPosition(content) == before { break }
         }
-        if element.exists && element.isHittable { return }
         XCTFail("未找到可交互元素；page=\(page)")
     }
 
