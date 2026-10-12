@@ -33,7 +33,10 @@ struct ParameterCardPage: View {
                             usesSingleColumn: dynamicTypeSize.isAccessibilitySize || valueScale >= 1.5,
                             accessibilityIdentifier: "\(pageID).parameter-content", content: gridContent,
                             canMove: { store.layout.canMove($0, to: $1, catalog: store.catalog) },
-                            onMove: move)
+                            onMove: { id, section, index in
+                                move(id, section, index)
+                                return gridSections
+                            })
             .background(AppTheme.background)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if store.isEditing { editorBar }

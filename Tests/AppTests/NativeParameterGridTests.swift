@@ -123,7 +123,8 @@ final class NativeParameterGridTests: XCTestCase {
                 return AnyView(Text(id).font(.body)
                     .frame(maxWidth: .infinity).frame(height: 96))
             },
-            canMove: { _, _ in false }, onMove: { _, _, _ in }
+            canMove: { _, _ in false },
+            onMove: { _, _, _ in [ParameterGridSection(id: "fixture", items: items)] }
         )
         let host = UIHostingController(rootView: AnyView(grid
             .environment(\.dynamicTypeSize, dynamicTypeSize)

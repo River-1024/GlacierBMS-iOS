@@ -34,7 +34,8 @@ struct NativeParameterGrid: UIViewRepresentable {
     var accessibilityIdentifier: String
     var content: (String) -> AnyView
     var canMove: (String, String) -> Bool
-    var onMove: (String, String, Int) -> Void
+    // Return the committed model synchronously; SwiftUI updateUIView arrives later.
+    var onMove: (String, String, Int) -> [ParameterGridSection]
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
@@ -49,7 +50,7 @@ struct NativeParameterGrid: UIViewRepresentable {
         accessibilityIdentifier: String,
         content: @escaping (String) -> AnyView,
         canMove: @escaping (String, String) -> Bool,
-        onMove: @escaping (String, String, Int) -> Void
+        onMove: @escaping (String, String, Int) -> [ParameterGridSection]
     ) {
         self.sections = sections
         self.isEditing = isEditing
@@ -115,6 +116,9 @@ struct NativeParameterGrid: UIViewRepresentable {
             let cardID: String
             let layoutID = UUID().uuidString
             var committed = false
+            var sessionEnded = false
+            var dropFinished = false
+            var snapshotFinished = false
 
             init(owner: Coordinator, cardID: String) {
                 self.owner = owner
@@ -164,13 +168,16 @@ struct NativeParameterGrid: UIViewRepresentable {
             collectionView.accessibilityIdentifier = parent.accessibilityIdentifier
             collectionView.dragInteractionEnabled = parent.isEditing
             // Keep other visible cards live, including freshness/error transitions.
-            // Only the lifted card's host and structural/layout work wait for drag end;
-            // UIKit owns the lifted preview snapshot, not a frozen page of telemetry.
-            // Live text may naturally self-size; no manual layout invalidation here.
-            if activeDrag != nil {
-                refreshVisibleContent(in: collectionView)
+            // Freeze hosting/layout churn only while the accepted preview settles.
+            // During the drag, other cards still receive live telemetry normally.
+            if let token = activeDrag {
+                if !token.committed { refreshVisibleContent(in: collectionView) }
                 return
             }
+            updateLayout(in: collectionView)
+        }
+
+        private func updateLayout(in collectionView: UICollectionView, completion: (() -> Void)? = nil) {
             collectionView.semanticContentAttribute = parent.layoutDirection == .rightToLeft
                 ? .forceRightToLeft : .forceLeftToRight
             let newSingleColumn = parent.usesSingleColumn || parent.dynamicTypeSize >= .xxxLarge
@@ -179,6 +186,7 @@ struct NativeParameterGrid: UIViewRepresentable {
             let newStructure = parent.sections.map {
                 Structure(id: $0.id, hasTitle: $0.title != nil, items: $0.items)
             }
+            if columnChanged { collectionView.collectionViewLayout.invalidateLayout() }
             if newStructure != structure {
                 structure = newStructure
                 layoutSections = makeLayoutSections()
@@ -192,13 +200,16 @@ struct NativeParameterGrid: UIViewRepresentable {
                 // Estimated heights + no diff animations also honour Reduce Motion.
                 dataSource?.apply(snapshot, animatingDifferences: false) { [weak self, weak collectionView] in
                     guard let self, let collectionView else { return }
-                    self.refreshVisibleContent(in: collectionView)
+                    if self.activeDrag?.committed != true {
+                        self.refreshVisibleContent(in: collectionView)
+                    }
+                    completion?()
                 }
             } else {
                 // No reloadData/reloadItems/reconfigure snapshot on telemetry ticks.
-                refreshVisibleContent(in: collectionView)
+                if activeDrag?.committed != true { refreshVisibleContent(in: collectionView) }
+                completion?()
             }
-            if columnChanged { collectionView.collectionViewLayout.invalidateLayout() }
         }
 
         private func makeLayoutSections() -> [LayoutSection] {
@@ -350,6 +361,14 @@ struct NativeParameterGrid: UIViewRepresentable {
                             dragSessionIsRestrictedToDraggingApplication session: UIDragSession) -> Bool { true }
 
         func collectionView(_ collectionView: UICollectionView, dragSessionDidEnd session: UIDragSession) {
+            guard let token = session.localContext as? DragToken, token === activeDrag else { return }
+            token.sessionEnded = true
+            finishDragIfReady(token, in: collectionView)
+        }
+
+        private func finishDragIfReady(_ token: DragToken, in collectionView: UICollectionView) {
+            guard token === activeDrag, token.sessionEnded,
+                  !token.committed || (token.dropFinished && token.snapshotFinished) else { return }
             activeDrag = nil
             refresh(in: collectionView)
         }
@@ -381,24 +400,63 @@ struct NativeParameterGrid: UIViewRepresentable {
         func collectionView(_ collectionView: UICollectionView,
                             performDropWith coordinator: UICollectionViewDropCoordinator) {
             guard let token = localToken(for: coordinator.session), coordinator.items.count == 1,
-                  let item = coordinator.items.first, item.sourceIndexPath != nil,
+                  let item = coordinator.items.first, let sourcePath = item.sourceIndexPath,
                   let itemToken = item.dragItem.localObject as? DragToken, itemToken === token,
                   let destination = destination(at: coordinator.destinationIndexPath,
                                                 session: coordinator.session, in: collectionView),
                   parent.canMove(token.cardID, destination.sectionID) else { return }
+            let sourceCenter = collectionView.collectionViewLayout.layoutAttributesForItem(at: sourcePath)?.center
+                ?? CGPoint(x: collectionView.bounds.midX, y: collectionView.bounds.midY)
             token.committed = true
-            // Animate a local preview, not replacement/import or speculative model mutation.
-            let target = UIDragPreviewTarget(container: collectionView,
-                                             center: coordinator.session.location(in: collectionView))
-            coordinator.drop(item.dragItem, to: target)
+            let isSamePosition: Bool
             if let source = parent.sections.first(where: { $0.id == destination.sectionID }),
-               let sourceIndex = source.items.filter(\.isDraggable).firstIndex(where: { $0.id == token.cardID }),
-               destination.index == sourceIndex || destination.index == sourceIndex + 1 {
-                return // Same position: leave the model untouched.
+               let sourceIndex = source.items.filter(\.isDraggable).firstIndex(where: { $0.id == token.cardID }) {
+                isSamePosition = destination.index == sourceIndex || destination.index == sourceIndex + 1
+            } else {
+                isSamePosition = false
             }
-            // Original PARAMETER array insertion boundary, before removing the source.
-            // The caller corrects the offset for a forward move within the same section.
-            parent.onMove(token.cardID, destination.sectionID, destination.index)
+            if !isSamePosition {
+                // Original insertion boundary, before removing the source. The caller
+                // corrects same-section offsets and returns the actual committed model.
+                parent.sections = parent.onMove(token.cardID, destination.sectionID, destination.index)
+            }
+            // Logical groups split into compact/full-width runs, so the proposed
+            // IndexPath is not necessarily the final item's path.
+            UIView.performWithoutAnimation {
+                updateLayout(in: collectionView) { [weak self, weak collectionView] in
+                    guard let self, let collectionView else { return }
+                    token.snapshotFinished = true
+                    self.finishDragIfReady(token, in: collectionView)
+                }
+                collectionView.layoutIfNeeded()
+            }
+            // Use the coordinator inside performDropWith, not from an asynchronous
+            // snapshot completion. Verify the applied model before targeting its cell.
+            let appliedSnapshot = dataSource?.snapshot()
+            let animation: UIDragAnimating
+            if appliedSnapshot?.sectionIdentifiers == layoutSections.map(\.id),
+               appliedSnapshot?.itemIdentifiers == layoutSections.flatMap(\.items),
+               let finalPath = dataSource?.indexPath(for: token.cardID) {
+                animation = coordinator.drop(item.dragItem, toItemAt: finalPath)
+            } else {
+                // This is a failed target contract, not a successful drop. Record only
+                // local layout IDs (never telemetry), and observe the fallback animation
+                // rather than pretending the preview has already finished.
+                let expected = layoutSections.map { $0.id.sectionID + ":" + ($0.id.anchorID ?? "empty") }
+                let actual = appliedSnapshot?.sectionIdentifiers.map {
+                    $0.sectionID + ":" + ($0.anchorID ?? "empty")
+                } ?? []
+                AppLog.ui.error("参数拖放目标快照不一致：card=\(token.cardID)，"
+                    + "expected=\(expected)/\(layoutSections.flatMap(\.items))，"
+                    + "actual=\(actual)/\(appliedSnapshot?.itemIdentifiers ?? [])")
+                let target = UIDragPreviewTarget(container: collectionView, center: sourceCenter)
+                animation = coordinator.drop(item.dragItem, to: target)
+            }
+            animation.addCompletion { [weak self, weak collectionView] _ in
+                guard let self, let collectionView else { return }
+                token.dropFinished = true
+                self.finishDragIfReady(token, in: collectionView)
+            }
         }
 
         private func destination(at suggested: IndexPath?, session: UIDropSession,
@@ -508,16 +566,17 @@ struct NativeParameterGrid_Previews: PreviewProvider {
     }
 
     private static var previewGrid: some View {
-        NativeParameterGrid(
-            sections: [
-                ParameterGridSection(id: "battery", title: "电池", items: [
-                    ParameterGridItem(id: "voltage"), ParameterGridItem(id: "current"),
-                    ParameterGridItem(id: "add.battery", isDraggable: false, fullWidth: true)
-                ]),
-                ParameterGridSection(id: "empty", title: "空分类", items: [
-                    ParameterGridItem(id: "add.empty", isDraggable: false, fullWidth: true)
-                ])
-            ],
+        let sections = [
+            ParameterGridSection(id: "battery", title: "电池", items: [
+                ParameterGridItem(id: "voltage"), ParameterGridItem(id: "current"),
+                ParameterGridItem(id: "add.battery", isDraggable: false, fullWidth: true)
+            ]),
+            ParameterGridSection(id: "empty", title: "空分类", items: [
+                ParameterGridItem(id: "add.empty", isDraggable: false, fullWidth: true)
+            ])
+        ]
+        return NativeParameterGrid(
+            sections: sections,
             isEditing: true, usesSingleColumn: false, accessibilityIdentifier: "preview.parameter-grid",
             content: { id in
                 if id.hasPrefix("add.") {
@@ -526,7 +585,7 @@ struct NativeParameterGrid_Previews: PreviewProvider {
                 return AnyView(AppMetricCard(title: id == "voltage" ? "电压" : "电流",
                                              value: "--", detail: "未连接"))
             },
-            canMove: { _, _ in true }, onMove: { _, _, _ in }
+            canMove: { _, _ in true }, onMove: { _, _, _ in sections }
         )
     }
 }
