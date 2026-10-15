@@ -17,6 +17,7 @@ struct RootView: View {
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var bms: BmsBluetoothService
     @EnvironmentObject private var range: RangeService
+    @EnvironmentObject private var location: LocationService
 
     @State private var selection: Tab = .dashboard
     @State private var hasStartedForeground = false
@@ -56,6 +57,7 @@ struct RootView: View {
             if phase != .active { acceleration.stop(reason: "App 离开前台") }
             if phase == .background {
                 returnedFromBackground = true
+                location.setForegroundActive(false)
                 bms.pauseForBackground()
             }
             if phase == .active { activateForegroundIfNeeded() }
@@ -64,6 +66,7 @@ struct RootView: View {
     }
 
     private func activateForegroundIfNeeded() {
+        location.setForegroundActive(true)
         // inactive → active（系统弹窗/控制中心）不生成新的自动重连机会。
         if !hasStartedForeground || returnedFromBackground {
             hasStartedForeground = true

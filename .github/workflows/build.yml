@@ -47,6 +47,10 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_settings_contract.py
 
+      - name: Check location lifecycle source contracts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
+        run: python3 scripts/check_location_contract.py
+
       - name: Check dashboard source contracts
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.build_only }}
         run: python3 scripts/check_dashboard_contract.py

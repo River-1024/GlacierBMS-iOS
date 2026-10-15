@@ -32,7 +32,8 @@ struct ANTuRideApp: App {
         let bms = BmsBluetoothService(defaults: defaults, startupAutoConnectEnabled: driving.settings.bmsAutoConnectEnabled,
                                       queryIntervalMs: driving.settings.bluetoothRefreshIntervalMs,
                                       createsBluetoothManager: createsBluetoothManager, registry: registry)
-        let location = LocationService()
+        // 所有 UI 测试均不触发系统定位授权，避免遮挡页面操作。
+        let location = LocationService(createsLocationManager: Self.createsLocationManager())
         _bmsService = StateObject(wrappedValue: bms)
         _locationService = StateObject(wrappedValue: location)
         let trip = TripSessionService(locationService: location, bmsService: bms, store: Self.tripStore())
@@ -76,6 +77,15 @@ struct ANTuRideApp: App {
         }
         #endif
         return .standard
+    }
+
+    private static func createsLocationManager() -> Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("--ui-test-") }) {
+            return false
+        }
+        #endif
+        return true
     }
 
     private static func createsBluetoothManager() -> Bool {
