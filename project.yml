@@ -2,19 +2,19 @@ name: ANTuRide
 options:
   bundleIdPrefix: com.zjsf
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "16.1"
   createIntermediateGroups: true
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.1"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 targets:
   ANTuRideDomain:
     type: framework
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "16.1"
     sources:
       - path: Sources/Domain
     settings:
@@ -25,12 +25,15 @@ targets:
   ANTuRide:
     type: application
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "16.1"
     sources:
       - path: Sources/App
       - path: Sources/Services
       - path: Sources/Features
       - path: Sources/DesignSystem
+      # 实时活动的 ActivityAttributes 必须同时编进 App 与 Widget extension。
+      # 注意：Sources/Widgets 只属于 extension，不能出现在这里（@main 冲突）。
+      - path: Sources/LiveActivity
       # 资源必须走 sources + buildPhase: resources；target 级 `resources` 键
       # 不生效，会导致 Assets.car 与 PrivacyInfo.xcprivacy 不进包。
       - path: Resources/Assets.xcassets
@@ -39,6 +42,7 @@ targets:
         buildPhase: resources
     dependencies:
       - target: ANTuRideDomain
+      - target: ANTuRideLiveActivity
     info:
       path: Support/Info.plist
       properties:
@@ -60,6 +64,11 @@ targets:
         # 导航类标准模式；不需要「始终」授权。
         UIBackgroundModes:
           - location
+          # 锁屏续记（2026-10-22）：行程记录期间需保持 BLE 连接与周期查询。
+          # 缺此项时锁屏会静默断流——活动还在、数字不动，只能靠 staleDate 暴露。
+          - bluetooth-central
+        # 实时活动（灵动岛 + 锁屏卡片）。活动只在行程记录期间存在，结束即移除。
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide
@@ -70,10 +79,35 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
+  # Widget extension：实时活动与灵动岛。
+  # 硬约束：Sources/Widgets 内是 @main WidgetBundle，绝不能进 App target。
+  ANTuRideLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    sources:
+      - path: Sources/LiveActivity
+      - path: Sources/Widgets/LiveActivity
+      - path: Resources/LiveActivity/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    info:
+      path: Support/LiveActivityInfo.plist
+      properties:
+        CFBundleDisplayName: 安途实时活动
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide.liveactivity
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+
   ANTuRideTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "16.1"
     sources:
       # Tests/UnitTests 同时被 SwiftPM（Package.swift 的 ANTuRideDomainTests）编译，
       # 因此该目录只能放只依赖 ANTuRideDomain 的测试。
@@ -91,7 +125,7 @@ targets:
   ANTuRideUITests:
     type: bundle.ui-testing
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "16.1"
     sources:
       - path: Tests/UITests
     dependencies:
@@ -108,6 +142,7 @@ schemes:
       targets:
         ANTuRide: all
         ANTuRideDomain: all
+        ANTuRideLiveActivity: all
         ANTuRideTests: [test]
         ANTuRideUITests: [test]
     run:

@@ -1,3 +1,4 @@
+import ActivityKit
 import Foundation
 import SwiftUI
 import ANTuRideDomain
@@ -108,6 +109,9 @@ struct DrivingSettingsView: View {
     @State private var confirmingReset = false
     @State private var editingField: String?
     @FocusState private var focusedField: String?
+    /// 独立 key：不放进 `DrivingSettings` 的版本化 JSON，
+    /// 避免新增字段让旧存档解码失败并回退默认值。
+    @AppStorage(RideLiveActivityCoordinator.enabledDefaultsKey) private var liveActivityEnabled = true
 
     init(store: DrivingSettingsStore) {
         _store = StateObject(wrappedValue: store)
@@ -153,6 +157,19 @@ struct DrivingSettingsView: View {
                 Text("显示偏好")
             } footer: {
                 Text("字号比例 0.5–2.0，仅表示数值大小。温度来源默认“自动”，也可输入探头序号（从 1 开始）；实际探头选择与越界回退需遥测消费端接入。修改完成后自动保存。")
+            }
+            Section {
+                Toggle("锁屏实时活动", isOn: $liveActivityEnabled)
+                    .accessibilityIdentifier("driving.liveActivity")
+                if !ActivityAuthorizationInfo().areActivitiesEnabled {
+                    Text("系统设置中已关闭「实时活动」，此开关暂不生效；请在 设置 → 安途 → 实时活动 中允许。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            } header: {
+                Text("锁屏与灵动岛")
+            } footer: {
+                Text("仅在行程记录期间显示速度、SOC、功率与里程，结束行程后卡片自动移除。数据不可用或已过期时显示 -- 或过期提示，不显示 0。")
             }
             Section {
                 ForEach(Self.powerFields) { numericRow($0) }

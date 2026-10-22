@@ -103,6 +103,15 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${APP_PATH}/Info.plist")" = "AppIcon"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP_PATH}/Info.plist")" = "com.zjsf.anturide"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${APP_PATH}/Info.plist")" = "安途"
+          # 实时活动的三条独立断言：缺任意一条都会表现为「能编译但灵动岛不出现」。
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "${APP_PATH}/Info.plist")" = "true" \
+            || { echo 'NSSupportsLiveActivities missing from app Info.plist' >&2; exit 1; }
+          APPEX="${APP_PATH}/PlugIns/ANTuRideLiveActivity.appex"
+          test -d "${APPEX}" || { echo 'Live Activity appex missing: extension not embedded into PlugIns' >&2; exit 1; }
+          test -f "${APPEX}/PrivacyInfo.xcprivacy" || { echo 'appex privacy manifest missing' >&2; exit 1; }
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "${APPEX}/Info.plist")" = "com.apple.widgetkit-extension" \
+            || { echo 'appex is not a widgetkit extension' >&2; exit 1; }
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APPEX}/Info.plist")" = "com.zjsf.anturide.liveactivity"
 
       - name: Upload unsigned iOS artifact
         uses: actions/upload-artifact@v4

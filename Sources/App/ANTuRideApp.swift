@@ -6,8 +6,12 @@ import SwiftUI
 struct ANTuRideApp: App {
     @StateObject private var appModel = AppModel()
     @StateObject private var bmsService: BmsBluetoothService
+    /// 遥测融合：本地 BLE 新鲜优先，远程仅作兜底（本期未接入远程链路）。
+    @StateObject private var telemetry: FusedTelemetrySource
     @StateObject private var locationService: LocationService
     @StateObject private var tripSession: TripSessionService
+    /// 锁屏实时活动（灵动岛 + 锁屏卡片）。只在行程记录期间存在。
+    @StateObject private var liveActivity: RideLiveActivityCoordinator
     @StateObject private var rangeService: RangeService
     @StateObject private var controllerService: ControllerBluetoothService
     @StateObject private var drivingSettings: DrivingSettingsStore
@@ -34,11 +38,16 @@ struct ANTuRideApp: App {
                                       createsBluetoothManager: createsBluetoothManager, registry: registry)
         // 所有 UI 测试均不触发系统定位授权，避免遮挡页面操作。
         let location = LocationService(createsLocationManager: Self.createsLocationManager())
+        let fused = FusedTelemetrySource(local: bms)
         _bmsService = StateObject(wrappedValue: bms)
+        _telemetry = StateObject(wrappedValue: fused)
         _locationService = StateObject(wrappedValue: location)
-        let trip = TripSessionService(locationService: location, bmsService: bms, store: Self.tripStore())
+        let trip = TripSessionService(locationService: location, telemetry: fused, store: Self.tripStore())
         _tripSession = StateObject(wrappedValue: trip)
-        let range = RangeService(bms: bms, location: location, defaults: defaults)
+        // 只观察行程/遥测/定位，不侵入业务服务；无行程时不会创建活动。
+        let live = RideLiveActivityCoordinator(tripSession: trip, telemetry: fused, location: location, defaults: defaults)
+        _liveActivity = StateObject(wrappedValue: live)
+        let range = RangeService(telemetry: fused, location: location, defaults: defaults)
         // 仅生产组合根应用 15min/10s 默认；独立服务测试保留 5min/即时刷新契约。
         range.applyDrivingSettings(driving.settings)
         _rangeService = StateObject(wrappedValue: range)
