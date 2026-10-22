@@ -25,7 +25,9 @@ public struct TripStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = Self.fileURL(for: trip.id, in: directory)
         let data = try JSONEncoder().encode(trip)
-        try data.write(to: url, options: .atomic)
+        // 锁屏续记后仍要在锁屏期间落盘，显式声明「首次解锁后可用」等级。
+        // 不可用 .completeFileProtection——那会让锁屏期间的写入直接失败。
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         AppLog.location.info("行程已保存：\(trip.id.uuidString)（\(data.count) 字节，\(trip.segments.count) 段）")
     }
 

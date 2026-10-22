@@ -65,8 +65,12 @@ final class RangeService: ObservableObject {
     }
 
     convenience init(bms: BmsBluetoothService, location: LocationService, defaults: UserDefaults = .standard) {
+        self.init(telemetry: bms, location: location, defaults: defaults)
+    }
+
+    convenience init(telemetry: TelemetrySource, location: LocationService, defaults: UserDefaults = .standard) {
         self.init(defaults: defaults)
-        observe(bms: bms, location: location)
+        observe(telemetry: telemetry, location: location)
     }
 
     /// 与 Android 相同：节流窗口快照，当前剩余 Ah 和安全状态不被刷新周期冻结。
@@ -88,12 +92,12 @@ final class RangeService: ObservableObject {
         refresh()
     }
 
-    private func observe(bms: BmsBluetoothService, location: LocationService?) {
-        connected = bms.state == .ready
-        setDeviceID(connected ? bms.connectedDeviceID : nil)
+    private func observe(telemetry: TelemetrySource, location: LocationService?) {
+        connected = telemetry.linkState == .ready
+        setDeviceID(connected ? telemetry.telemetryDeviceID : nil)
         locationUpdating = location?.isUpdating == true
         // Published 在赋值前发送：直接消费事件参数，不回读旧属性。
-        bms.$latestSnapshot.dropFirst().sink { [weak self] snapshot in
+        telemetry.snapshotPublisher.dropFirst().sink { [weak self] snapshot in
             guard let self else { return }
             if let snapshot { self.ingest(snapshot: snapshot) }
             else {
@@ -102,7 +106,7 @@ final class RangeService: ObservableObject {
                 self.refresh()
             }
         }.store(in: &subscriptions)
-        bms.$state.combineLatest(bms.$connectedDeviceID).sink { [weak self] state, id in
+        telemetry.linkStatePublisher.combineLatest(telemetry.deviceIDPublisher).sink { [weak self] state, id in
             guard let self else { return }
             self.setConnectionReady(state == .ready)
             self.setDeviceID(state == .ready ? id : nil)

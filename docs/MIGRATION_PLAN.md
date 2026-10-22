@@ -608,3 +608,39 @@ Dashboard 减项、行程 Tab 归位、根页隐藏导航栏与 Swift Charts 迁
 源码 `60101a4d826418fec9879ca33400e13130208c13`（`60101a4`）已推送 `codex/ios-parity-20261010`；Run `38202579046` 精确 SHA 成功，14 个具名步骤全部通过，SwiftPM 161、iOS XCTest 364、XCUITest 12 全部零失败，四项源码契约 33 例通过。unsigned IPA 2276667 字节、SHA-256 `f2ee0df32452450e6158d5abcba8b78043c4095ed6545cdb4f75dc6ca256e797`，已归档 `build/ci/60101a4/` 并由 `build/ci/latest/` 同步（四份文件同指该 Run）。4 轮 CI 迭代的失败定位与修复见 `docs/CI_BUILD_RESULTS.md` 第 1、4 节。交付文档提交 `e81449c` 的连带运行 `38204388224` 同样成功（9m31s），仅用于证明文档改动不破坏构建；其产物归档 `build/ci/e81449c/`，因源码与 `60101a4` 相同而未替换 `latest`。
 
 未完成项仍是需要真实 iPhone + BLE + 车辆的验收（真实 GPS 漂移、断连重连、后台锁屏、容量跳变、VoiceOver/大字号）；未签名 IPA 必须先用个人证书签名。文档提交不改变已构建源码，也不意味着对文档版本重新构建。
+
+## 锁屏续记与遥测融合（北京时间 2026-10-22 15:25:44 +08:00）
+
+### 需求变更：锁屏暂停不再是红线
+
+旧红线「锁屏即 `suspend`，暂停区间记为 `suspended` 段」是当时无法在锁屏继续取数的妥协，不是产品终态。用户本轮明确：**能续记更好**。因此本节替换旧的锁屏验收条款；`docs/LIVE_ACTIVITY_PLAN.md` 的 v2 前提与本节一致。
+
+### 已施工（源码级，未经 CI 编译）
+
+| 文件 | 改动 |
+|---|---|
+| `Sources/Services/TripSessionService.swift` | 移除 `handleDeviceLocked()` 的 `recorder.suspend()`；锁屏改为 `.background` 相位并强制落盘一次；`handleDeviceUnlocked()` 只切回相位；新增 30s / 30 采样定期落盘；注入 `TelemetrySource`（保留 `bmsService:` 兼容 init） |
+| `Sources/Services/BmsBluetoothService.swift` | 新增 `sustainsBackgroundTelemetry` 与 2.5 倍后台降频；`pauseForBackground()` 在记录中保留连接与查询；放开 `startQueryTimer()` / `sendQueryIfReady()` 的 `isForeground` 硬守卫 |
+| `Sources/Services/TripStore.swift` | 落盘显式使用 `.completeFileProtectionUntilFirstUserAuthentication`，保证锁屏期间可写 |
+| `Sources/Services/Telemetry/TelemetrySource.swift` | 新增遥测来源协议、可用性枚举、BLE 遵循（零侵入 extension） |
+| `Sources/Services/Telemetry/RemoteTelemetryProviding.swift` | 远程按需拉取协议 + 占位实现（本期不接入） |
+| `Sources/Services/Telemetry/FusedTelemetrySource.swift` | 本地优先融合：本地新鲜不请求远程、过期/缺失才兜底、10s 冷却、不覆盖更新值 |
+| `Sources/Services/RangeService.swift` | 新增 `init(telemetry:location:defaults:)`，`bms:` 版本保留转发 |
+| `Sources/App/ANTuRideApp.swift` | 装配 `FusedTelemetrySource`，行程与续航统一消费 |
+| `project.yml` | `UIBackgroundModes` 增加 `bluetooth-central` |
+| `Tests/AppTests/TelemetryFusionTests.swift` | 6 项融合策略 + 1 项后台降频单测 |
+
+### 语义变更（必须同步到验收）
+
+1. 新行程不再产生 `suspended` 段；枚举值保留以兼容旧档案。
+2. 锁屏期间的丢点、断连由 `TripRecorder` 现有长间隔规则落为 `gap`，不插值。
+3. 崩溃丢失面由「上次暂停之后」缩小为「最近 30 秒」。
+4. 远程回填值使用设备侧采集时间，因此会被判过期并被能耗配对跳过——远程只做展示兜底。
+
+### 验证边界
+
+本轮仅完成源码与单测编写，**未执行** Swift/Xcode 编译、SwiftPM、XCTest/XCUITest、macOS CI 或真机验证。Windows 侧无法编译，以上改动均待 CI 与真机分层验证；真机必须覆盖「锁屏 30 分钟」长测（BLE 是否续流、落盘是否正常、电量消耗）。
+
+### 实时活动（Phase 3，同日施工）
+
+新增 `ANTuRideLiveActivity` Widget extension、四态灵动岛/锁屏 UI、更新节流器与观察式协调器；App 与 extension 的最低版本**一并提到 16.1**（ActivityKit 要求，16.0 设备不再支持，属已确认取舍）。实时活动数据源优先级为「本地 BLE 新鲜优先，远程按需兜底」。细节与验证边界见 `docs/LIVE_ACTIVITY_PLAN.md` §14。

@@ -60,6 +60,14 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
     /// 是否按设备名关键字过滤扫描结果。默认开启；关闭后列出附近全部蓝牙设备。
     @Published public private(set) var isKeywordFilterEnabled: Bool = true
 
+    /// 行程记录期间保持后台查询。由 `TripSessionService` 在行程开始/结束时置位：
+    /// 锁屏不再暂停采样后，为真时后台保留连接与周期查询，仅按倍率降频。
+    public private(set) var sustainsBackgroundTelemetry = false
+    /// 后台查询倍率：默认 1s → 2.5s，是锁屏长时记录的主要省电手段。
+    public static let backgroundQueryIntervalMultiplier: Double = 2.5
+    /// 用户设置的基础间隔；`effectiveQueryInterval` 是叠加后台倍率后的实际值。
+    private var baseQueryInterval: TimeInterval = BmsBluetoothService.queryInterval
+
     private let central: CBCentralManager?
     private let defaults: UserDefaults
     private var startupAutoConnectEnabled: Bool
@@ -123,9 +131,12 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
             state = .disconnected
         }
         let interval = Self.normalizedQueryInterval(milliseconds: settings.bluetoothRefreshIntervalMs)
-        guard effectiveQueryInterval != interval else { return }
-        effectiveQueryInterval = interval
-        if state == .ready { startQueryTimer() }
+        let intervalChanged = baseQueryInterval != interval
+        baseQueryInterval = interval
+        recomputeEffectiveQueryInterval()
+        if intervalChanged, state == .ready, isForeground || sustainsBackgroundTelemetry {
+            startQueryTimer()
+        }
     }
 
     static func normalizedQueryInterval(milliseconds: Int) -> TimeInterval {
@@ -139,8 +150,22 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
             isForeground = true
             connectionPolicy.beginForegroundSession()
         }
+        recomputeEffectiveQueryInterval()
         if state == .ready { startQueryTimer() }
         attemptAutomaticConnection()
+    }
+
+    /// 行程会话控制：记录期间锁屏继续查询；结束后恢复「后台不查询」的省电策略。
+    public func setBackgroundTelemetrySustained(_ sustained: Bool) {
+        guard sustainsBackgroundTelemetry != sustained else { return }
+        sustainsBackgroundTelemetry = sustained
+        recomputeEffectiveQueryInterval()
+        if sustained || isForeground {
+            if state == .ready { startQueryTimer() }
+        } else {
+            stopQueryTimer()
+        }
+        AppLog.ble.notice("后台遥测保持=\(sustained)，查询间隔 \(effectiveQueryInterval)s")
     }
 
     public func pauseForBackground() {
@@ -149,12 +174,29 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
         let hasUnverifiedReadyConnection = state == .ready && latestSnapshot == nil
         cancelConnectionAttempt()
         stopScan()
+        recomputeEffectiveQueryInterval()
+        if sustainsBackgroundTelemetry {
+            // 行程记录中：锁屏继续采样，保留连接与周期查询，只降频。
+            if state == .ready { startQueryTimer() }
+            AppLog.ble.notice("进入后台：行程记录中，保留 BMS 查询（间隔 \(effectiveQueryInterval)s）")
+            return
+        }
         stopQueryTimer()
         discardPendingConnection()
         if hasUnverifiedReadyConnection || [.connecting, .discovering, .reconnecting].contains(state) {
             retireCurrentPeripheral()
             state = .disconnected
         }
+    }
+
+    /// 依据前台/后台与基础间隔重算实际间隔；不触碰定时器生命周期。
+    private func recomputeEffectiveQueryInterval() {
+        let upper = TimeInterval(DrivingSettings.bluetoothRefreshIntervalMsBounds.upperBound) / 1000
+        let multiplier = (!isForeground && sustainsBackgroundTelemetry)
+            ? Self.backgroundQueryIntervalMultiplier : 1
+        let next = min(baseQueryInterval * multiplier, upper)
+        guard effectiveQueryInterval != next else { return }
+        effectiveQueryInterval = next
     }
 
     public func reconnectRememberedDevice() {
@@ -479,7 +521,7 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
 
     private func startQueryTimer() {
         stopQueryTimer()
-        guard isForeground, state == .ready, peripheral != nil else { return }
+        guard isForeground || sustainsBackgroundTelemetry, state == .ready, peripheral != nil else { return }
         let generation = queryGeneration
         let timer = Timer(timeInterval: effectiveQueryInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -499,7 +541,7 @@ public final class BmsBluetoothService: NSObject, ObservableObject {
     }
 
     private func sendQueryIfReady() {
-        guard isForeground, state == .ready, let peripheral, isCurrentSession(peripheral),
+        guard isForeground || sustainsBackgroundTelemetry, state == .ready, let peripheral, isCurrentSession(peripheral),
               let characteristic, characteristic.isNotifying else { return }
         guard !expireConnectionAttemptIfNeeded(generation: connectionAttemptGeneration) else { return }
         if lastRSSIRequestAt.map({ Date().timeIntervalSince($0) >= 5 }) ?? true {
