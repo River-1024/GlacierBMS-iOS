@@ -111,7 +111,7 @@ struct DrivingSettingsView: View {
     @FocusState private var focusedField: String?
     /// 独立 key：不放进 `DrivingSettings` 的版本化 JSON，
     /// 避免新增字段让旧存档解码失败并回退默认值。
-    @AppStorage(RideLiveActivityCoordinator.enabledDefaultsKey) private var liveActivityEnabled = true
+    @AppStorage(RideLiveActivitySettings.enabledKey) private var liveActivityEnabled = true
 
     init(store: DrivingSettingsStore) {
         _store = StateObject(wrappedValue: store)

@@ -2,6 +2,13 @@ import ActivityKit
 import Combine
 import Foundation
 
+/// 实时活动的偏好键。独立命名空间是必要的：`RideLiveActivityCoordinator`
+/// 是 `@MainActor` 类型，其静态成员会一并被隔离；而 `@AppStorage` 的属性初始值
+/// 在非隔离上下文求值，直接引用会编译失败。
+public enum RideLiveActivitySettings {
+    public static let enabledKey = "com.zjsf.anturide.liveActivityEnabled"
+}
+
 /// 骑行实时活动协调器：把行程会话、遥测与定位接成一条活动生命周期。
 ///
 /// 设计要点：
@@ -10,10 +17,13 @@ import Foundation
 /// - **`pushType: .token` 一次锁定**：该字段在 `request` 时决定、事后不能改。
 ///   本期没有服务端，令牌只记录不上报；将来接远程推送时无需让用户重建活动。
 /// - **残留清理**：崩溃或被强杀会在锁屏留下「永远骑行中」的卡片，冷启动必须清掉。
+///
+/// **隔离**：整类标注 `@MainActor`。它读的 `TripSessionService` / `LocationService` /
+/// `TelemetrySource` 全部是主线程隔离的 `@Published`；不标会让每一处读取都变成
+/// 「main actor-isolated property can not be referenced from a nonisolated context」。
+/// `sink` 闭包非 `@Sendable`，会自动继承本类隔离，因此内部无需再切线程。
+@MainActor
 public final class RideLiveActivityCoordinator: ObservableObject {
-    /// 与 `DrivingSettings` 的版本化 JSON 分开存储：向 `DrivingSettings` 增加字段
-    /// 会让旧存档解码失败并回退默认值，代价远大于一个新 key。
-    public static let enabledDefaultsKey = "com.zjsf.anturide.liveActivityEnabled"
     /// 超过该时长未更新，系统会把活动标记为过期（锁屏变灰），而不是继续展示旧值。
     public static let staleWindow: TimeInterval = 30
 
@@ -47,7 +57,7 @@ public final class RideLiveActivityCoordinator: ObservableObject {
         self.policy = policy
         self.now = now
         bind()
-        Task { await endOrphanedActivities() }
+        Task { await self.endOrphanedActivities() }
     }
 
     /// 系统设置里是否允许实时活动。设置页据此显示降级说明。
@@ -56,7 +66,7 @@ public final class RideLiveActivityCoordinator: ObservableObject {
     }
 
     private var isEnabled: Bool {
-        defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? true
+        defaults.object(forKey: RideLiveActivitySettings.enabledKey) as? Bool ?? true
     }
 
     /// UI 回归会点「开始行程」，但不应在模拟器上创建真实活动并留下锁屏卡片。
@@ -133,7 +143,7 @@ public final class RideLiveActivityCoordinator: ObservableObject {
         lastPushedAt = nil
         lastPushedState = nil
         isRunning = false
-        Task { await end(activity, state: finalState) }
+        Task { await self.end(activity, state: finalState) }
         AppLog.lifecycle.notice("实时活动已结束")
     }
 
@@ -145,7 +155,7 @@ public final class RideLiveActivityCoordinator: ObservableObject {
         guard policy.shouldPush(previous: lastPushedState, next: next, elapsedSeconds: elapsed) else { return }
         lastPushedAt = current
         lastPushedState = next
-        Task { await update(activity, state: next) }
+        Task { await self.update(activity, state: next) }
     }
 
     /// App 冷启动清理历史残留。崩溃或强杀会留下「永远骑行中」的卡片。
