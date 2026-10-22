@@ -82,8 +82,15 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
             .store(in: &cancellables)
         // 本地不再上报时（例如 BLE 静默断流）也需要推进过期判定与远程兜底，
         // 因此保留一个低频探测；该定时器只在主线程运行，不产生高频开销。
+        // 但「既无本地快照、又没接远程」时没有任何状态会随时间变化，
+        // 此时必须直接跳过：否则每次 tick 都会走一遍派发，
+        // 订阅方（SwiftUI 视图树）被反复失效，长按菜单与拖拽手势会被打断。
         Timer.publish(every: probeInterval, on: .main, in: .common).autoconnect()
-            .sink { [weak self] _ in self?.refresh() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard self.remote != nil || self.local.latestSnapshot != nil else { return }
+                self.refresh()
+            }
             .store(in: &cancellables)
         refresh()
     }
@@ -95,7 +102,7 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
             // 把陈旧值当成可用数据——这与旧 BLE 断开即置 nil 的语义一致。
             if remote == nil {
                 cancelRemote()
-                telemetryOrigin = .none
+                setOrigin(.none)
                 remoteDeviceID = nil
                 if latestSnapshot != nil { latestSnapshot = nil }
             }
@@ -108,7 +115,7 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
             return
         }
         cancelRemote()
-        telemetryOrigin = .local
+        setOrigin(.local)
         remoteDeviceID = nil
         if latestSnapshot != snapshot { latestSnapshot = snapshot }
         recomputeAvailability()
@@ -120,7 +127,7 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
             let age = max(0, now().timeIntervalSince(snapshot.receivedAt))
             if age <= localFreshWindow {
                 cancelRemote()
-                telemetryOrigin = .local
+                setOrigin(.local)
                 remoteDeviceID = nil
                 if latestSnapshot != snapshot { latestSnapshot = snapshot }
                 recomputeAvailability()
@@ -136,7 +143,7 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
                 }
             }
             // 本地值更新：降级为 stale 展示，并允许远程兜底。
-            telemetryOrigin = .local
+            setOrigin(.local)
             remoteDeviceID = nil
             if latestSnapshot != snapshot { latestSnapshot = snapshot }
         }
@@ -182,7 +189,7 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
         // 不允许旧值覆盖新值。
         if let existing = latestSnapshot, existing.receivedAt > result.snapshot.receivedAt { return }
         lastRemoteFetchAt = result.fetchedAt
-        telemetryOrigin = .remote
+        setOrigin(.remote)
         remoteDeviceID = result.deviceID
         latestSnapshot = result.snapshot
         recomputeAvailability()
@@ -196,7 +203,7 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
     // MARK: - 派生状态
 
     private func recomputeAvailability() {
-        if latestSnapshot == nil { telemetryOrigin = .none }
+        if latestSnapshot == nil { setOrigin(.none) }
         let nextDeviceID: UUID?
         switch telemetryOrigin {
         case .local: nextDeviceID = local.telemetryDeviceID
@@ -205,20 +212,31 @@ public final class FusedTelemetrySource: ObservableObject, TelemetrySource {
         }
         if telemetryDeviceID != nextDeviceID { telemetryDeviceID = nextDeviceID }
         guard let snapshot = latestSnapshot else {
-            telemetryAvailability = .offline
+            setAvailability(.offline)
             updateLinkState()
             return
         }
         let age = max(0, now().timeIntervalSince(snapshot.receivedAt))
         switch telemetryOrigin {
         case .local:
-            telemetryAvailability = age <= localFreshWindow ? .localBLE : .localStale(ageSeconds: age)
+            setAvailability(age <= localFreshWindow ? .localBLE : .localStale(ageSeconds: age))
         case .remote:
-            telemetryAvailability = .remote(ageSeconds: age)
+            setAvailability(.remote(ageSeconds: age))
         case .none:
-            telemetryAvailability = .offline
+            setAvailability(.offline)
         }
         updateLinkState()
+    }
+
+    /// 只在取值实际变化时赋值。`@Published` 在 `willSet` 阶段就会广播，
+    /// 无条件赋值会让订阅它的整棵视图树每秒失效——探测定时器因此变成
+    /// 「界面永远不进入 idle 状态」，UI 测试里的手势与 `exists` 断言随之失效。
+    private func setOrigin(_ next: TelemetryOrigin) {
+        if telemetryOrigin != next { telemetryOrigin = next }
+    }
+
+    private func setAvailability(_ next: TelemetryAvailability) {
+        if telemetryAvailability != next { telemetryAvailability = next }
     }
 
     private func updateLinkState() {
