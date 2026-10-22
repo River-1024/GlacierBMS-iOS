@@ -112,6 +112,16 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "${APPEX}/Info.plist")" = "com.apple.widgetkit-extension" \
             || { echo 'appex is not a widgetkit extension' >&2; exit 1; }
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APPEX}/Info.plist")" = "com.zjsf.anturide.liveactivity"
+          # 版本号必须与宿主一致：缺失时能编译、能打包，只在安装阶段失败
+          # （bundleVersion must be set in placeholder attributes）。
+          APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP_PATH}/Info.plist")"
+          APPEX_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APPEX}/Info.plist" 2>/dev/null || echo missing)"
+          test "${APPEX_VERSION}" = "${APP_VERSION}" \
+            || { echo "appex CFBundleVersion (${APPEX_VERSION}) != app (${APP_VERSION})" >&2; exit 1; }
+          APP_SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP_PATH}/Info.plist")"
+          APPEX_SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APPEX}/Info.plist" 2>/dev/null || echo missing)"
+          test "${APPEX_SHORT_VERSION}" = "${APP_SHORT_VERSION}" \
+            || { echo "appex CFBundleShortVersionString (${APPEX_SHORT_VERSION}) != app (${APP_SHORT_VERSION})" >&2; exit 1; }
 
       - name: Upload unsigned iOS artifact
         uses: actions/upload-artifact@v4

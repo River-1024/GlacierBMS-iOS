@@ -14,7 +14,7 @@ public enum AppLogBootstrap {
     public static func install() {
         let previousUnclean = UserDefaults.standard.bool(forKey: crashFlagKey)
 
-        AppLog.lifecycle.notice("App 启动, 版本=\(appVersion), 部署目标 iOS 16.0")
+        AppLog.lifecycle.notice("App 启动, 版本=\(appVersion), 部署目标 iOS 16.1")
 
         if previousUnclean {
             // 上一次会话未正常走完 didEnterBackground / willTerminate。

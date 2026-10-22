@@ -99,6 +99,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zjsf.anturide.liveactivity
+        # 必须与宿主 App 的同名设置完全一致。缺这两项时 GENERATE_INFOPLIST_FILE
+        # 不会写入 CFBundleVersion / CFBundleShortVersionString，模拟器安装直接
+        # 失败：`bundleVersion must be set in placeholder attributes for an
+        # app extension placeholder`；上架也会因版本不一致被拒。
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         SKIP_INSTALL: YES
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
