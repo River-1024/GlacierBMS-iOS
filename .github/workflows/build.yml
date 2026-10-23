@@ -25,7 +25,11 @@ concurrency:
 jobs:
   verify:
     runs-on: macos-15
-    timeout-minutes: 60
+    # 90 分钟是实测留出的余量：HomeParameterEditingUITests 单个方法在 CI 上
+    # 需要 150–330 秒（大字号/横屏用例要做几十次滑动），13 个方法合计约 45 分钟，
+    # 加上设备构建与单元测试，60 分钟会被顶到上限而整体 cancelled
+    # （Run 39906108735 即如此）。
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
