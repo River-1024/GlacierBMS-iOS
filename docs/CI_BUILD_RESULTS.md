@@ -247,3 +247,30 @@ GitHub 构建通过仅代表工程可编译、可测试，不构成设备已验�
 - 本机静态检查：蓝牙契约 10/10、设置 6/6、Dashboard 6/6、`git diff --check` 通过。
 - Run 元数据、CI 完整日志、产物校验报告和 IPA 保存在忽略目录 `build/ci/01aec26/` 及 `build/ci/latest/`；不提交生成物或签名材料。
 - 尚未完成真实 iPhone 安装、双 BLE 并发与独立断开/重连、VoiceOver 和车辆验收；不能用模拟器结果替代硬件结论。
+
+## 11. 实时活动 / 锁屏续记批次（北京时间 2026-10-23 14:50:00 +08:00）
+
+- 构建源码：`980afed`（仅 CI 超时调整），功能代码等价于 `c54c8c4`；分支 `codex/ios-parity-20261010`。
+- 产物：`build/ci/980afed/ANTuRide-unsigned.ipa`，`2,424,254` 字节，SHA-256 `6b1c37265d5ed2807e949bccb4fc0d3e232c0868b1bed8661d38026f6d224455`；`build/ci/latest/` 为同源副本。
+- 包内校验（逐项解包确认，非仅看 CI 绿灯）：App `0.1.0 (1)`、`MinimumOSVersion 16.1`、`NSSupportsLiveActivities = true`、`UIBackgroundModes = [location, bluetooth-central]`；`PlugIns/ANTuRideLiveActivity.appex` 内 `CFBundleVersion` 与短版本号与宿主一致、`NSExtensionPointIdentifier = com.apple.widgetkit-extension`；`Assets.car` 与两份 `PrivacyInfo.xcprivacy` 均在包内；无 `_CodeSignature`、无 `embedded.mobileprovision`，属 unsigned，需自行签名。
+
+### 11.1 本轮 CI 收敛过程（六轮，逐轮根因）
+
+| Run | 结论 | 根因与处置 |
+| --- | --- | --- |
+| `39809236764` | 失败 | 8 处 `main actor-isolated property can not be referenced from a nonisolated context`。协调器缺 `@MainActor`；整类标注后修复，三处 `Task { }` 补显式 `self` |
+| `39809758307` | 失败 | 设备构建与包校验通过，模拟器**安装**失败：`bundleVersion must be set in placeholder attributes`。appex 缺 `CFBundleVersion`/短版本号——`GENERATE_INFOPLIST_FILE` 只在目标自身定义 `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` 时才写入 |
+| `39814788383` | 失败 | 单元测试全绿；4 个 XCUITest 失败，整轮耗时 48 分钟。根因：`FusedTelemetrySource` 每 2 秒无条件给 `@Published` 赋值，整棵视图树反复失效，长按菜单与拖拽被打断 |
+| `39823774218` | 失败 | 失败数 4 → 2，「菜单动作不可点击」3 例全部消失，验证上一条判断成立；剩余 2 例是断言写法问题 |
+| `39902076071` / `39903152399` | 定向失败 | `range.save.settings` 早在 `533b33f` 就被移除，测试未同步；另一例是大字号横屏下「先滚到顶」方向反了 |
+| `39904602825` | 定向成功 | 只跑大字号横屏用例，`231s` → 通过 |
+
+### 11.2 两个必须记住的教训
+
+1. **能编译、能打包 ≠ 能安装**。appex 缺版本号只在安装阶段暴露，模拟器直接拒绝；这类缺陷必须在包校验步骤断言，本轮已把「appex 版本必须等于宿主」加入 CI。
+2. **IPA-only 运行会让 UI 测试长期失修**。`533b33f` 改了设置页语义、`d149742` 加入参数编辑测试，之后两次 CI 都是 `build_only`（跳过测试），于是 12 天没人发现断言引用了已删除的标识符。UI 测试要么进默认流水线，要么在改动契约时同步更新断言。
+
+### 11.3 未完成项（本轮明确移交）
+
+- 全量 UI 用例在最后一次断言修正后**未再跑通**（`39906108735` 被 60 分钟 job 上限取消，`39912155852` 按用户要求取消）。已通过的部分：13 个 `ANTuRideUITests` 中 12 个、`HomeParameterEditingUITests` 中 13 个；剩余 1 例经定向运行单独通过。合并前需要一次完整回归。
+- 真机验收全部未做：实时活动创建/结束、锁屏 30 分钟续记、灵动岛展开态、非挖孔机型锁屏卡片、系统关闭实时活动后的降级、行程结束后卡片消失。模拟器与 CI 结果不能替代这些结论。
