@@ -289,12 +289,13 @@ final class HomeParameterEditingUITests: XCTestCase {
         XCTAssertFalse(app.buttons["\(page).edit"].exists)
         scrollToTop(page)
         let card = grid(page).cells.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND NOT identifier CONTAINS %@ AND NOT identifier CONTAINS %@", "\(page).parameter-content.item.", ".item.fixed.", ".item.toggle.")).firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        // 大字号 + 横屏下虚拟化单元格出现得更晚；5 秒在软件渲染的 CI 上会抢跑。
+        XCTAssertTrue(card.waitForExistence(timeout: 15))
         card.press(forDuration: 1.2)
         let edit = app.buttons["编辑布局"]
-        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
         let hittable = NSPredicate { _, _ in edit.exists && edit.isHittable }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 5), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 10), .completed)
         edit.tap()
         XCTAssertTrue(app.buttons["\(page).cancel"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["首页参数"].exists)
@@ -307,8 +308,10 @@ final class HomeParameterEditingUITests: XCTestCase {
         let actionID = actionIdentifier(for: title, page: page, metricID: metricID)
         let action = app.buttons[actionID]
         XCTAssertTrue(action.waitForExistence(timeout: 5), "未找到菜单动作：\(actionID)")
+        // 菜单呈现动画与网格滚动共用主线程；CI 上 5 秒不够，表现为
+        // 「元素存在但始终不可点击」，而不是菜单没有弹出。
         let hittable = NSPredicate { _, _ in action.exists && action.isHittable }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 5),
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 15),
                        .completed, "菜单动作不可点击：\(actionID)")
         action.tap()
     }

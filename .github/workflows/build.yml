@@ -10,6 +10,10 @@ on:
         description: Build IPA only; skip automated tests and simulator diagnostics
         type: boolean
         default: false
+      only_testing:
+        description: 'Optional -only-testing filters, comma separated (e.g. ANTuRideUITests/HomeParameterEditingUITests)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -141,12 +145,22 @@ jobs:
             exit 1
           fi
           mkdir -p build/test-results
+          # 可选子集运行：UI 测试单个类在 CI 上要跑十几分钟，逐类排查时
+          # 用 only_testing 输入避免每轮都跑满全部用例。默认空值即全量。
+          FILTERS=""
+          if [ -n "${{ inputs.only_testing }}" ]; then
+            IFS=',' read -r -a ITEMS <<< "${{ inputs.only_testing }}"
+            for item in "${ITEMS[@]}"; do
+              FILTERS="${FILTERS} -only-testing:${item}"
+            done
+            echo "only-testing:${FILTERS}"
+          fi
           xcodebuild test \
             -project ANTuRide.xcodeproj \
             -scheme ANTuRide \
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
             -resultBundlePath build/test-results/ANTuRide.xcresult \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/test-results/xcodebuild.log
+            CODE_SIGNING_ALLOWED=NO ${FILTERS} 2>&1 | tee build/test-results/xcodebuild.log
 
       - name: Export simulator test diagnostics
         if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.build_only) }}
