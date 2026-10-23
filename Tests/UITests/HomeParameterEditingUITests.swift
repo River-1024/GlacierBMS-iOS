@@ -289,8 +289,13 @@ final class HomeParameterEditingUITests: XCTestCase {
         XCTAssertFalse(app.buttons["\(page).edit"].exists)
         scrollToTop(page)
         let card = grid(page).cells.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND NOT identifier CONTAINS %@ AND NOT identifier CONTAINS %@", "\(page).parameter-content.item.", ".item.fixed.", ".item.toggle.")).firstMatch
-        // 大字号 + 横屏下虚拟化单元格出现得更晚；5 秒在软件渲染的 CI 上会抢跑。
-        XCTAssertTrue(card.waitForExistence(timeout: 15))
+        // 大字号 + 横屏下，首屏可能整屏都是固定行/开关行，可替换的卡片被挤到
+        // 折叠线以下；此时「滚到顶部」反而看不到目标。先等一次，仍不出现就
+        // 向下滚动让虚拟化单元格生成，而不是把 5 秒当成元素不存在的证据。
+        if !card.waitForExistence(timeout: 5) {
+            for _ in 0..<8 where !card.exists { scrollGrid(page, upward: true) }
+        }
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
         card.press(forDuration: 1.2)
         let edit = app.buttons["编辑布局"]
         XCTAssertTrue(edit.waitForExistence(timeout: 10))

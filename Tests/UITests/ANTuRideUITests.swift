@@ -106,9 +106,10 @@ final class ANTuRideUITests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(identifier: "settings.range").count, 1)
         rangeEntry.tap()
         XCTAssertTrue(app.navigationBars["综合续航设置"].waitForExistence(timeout: 5))
-        // 推入动画结束后元素才进层级；`.exists` 是即时判断，在软件渲染的
-        // 模拟器上会抢跑，必须改成带等待的存在性断言。
-        XCTAssertTrue(app.buttons["range.save.settings"].waitForExistence(timeout: 5))
+        // 533b33f 起设置改为「改完即存」，页面不再有独立的保存按钮。
+        // 这里正向确认页面内容已渲染，并把「不提供第二个保存入口」固定成契约。
+        XCTAssertTrue(app.descendants(matching: .any)["range.restoreDefaults"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["range.save.settings"].exists)
         let capacity = app.descendants(matching: .any)["range.capacity.readout"].firstMatch
         for _ in 0..<3 {
             if capacity.exists { break }
