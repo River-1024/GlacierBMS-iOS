@@ -296,13 +296,18 @@ final class HomeParameterEditingUITests: XCTestCase {
             for _ in 0..<8 where !card.exists { scrollGrid(page, upward: true) }
         }
         XCTAssertTrue(card.waitForExistence(timeout: 10))
+        // 单元格「存在」不等于「可点」：向下滚动后它可能贴在底部安全区或
+        // 标签栏后面，长按坐标会落在标签栏上，菜单根本不会弹出。
+        for _ in 0..<8 where !card.isHittable { scrollGrid(page, upward: true) }
+        XCTAssertTrue(card.isHittable, "卡片存在但不可点击：\(page)")
         card.press(forDuration: 1.2)
         let edit = app.buttons["编辑布局"]
-        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        XCTAssertTrue(edit.waitForExistence(timeout: 15), "长按后未出现编辑布局菜单：\(page)")
         let hittable = NSPredicate { _, _ in edit.exists && edit.isHittable }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: app!)], timeout: 10), .completed)
         edit.tap()
-        XCTAssertTrue(app.buttons["\(page).cancel"].waitForExistence(timeout: 5))
+        // 编辑态要重排整张网格；XXXL + 横屏下重排明显更久，5 秒偏紧。
+        XCTAssertTrue(app.buttons["\(page).cancel"].waitForExistence(timeout: 15), "未进入编辑态：\(page)")
         XCTAssertFalse(app.navigationBars["首页参数"].exists)
     }
 
