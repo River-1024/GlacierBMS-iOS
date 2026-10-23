@@ -647,3 +647,16 @@
 - 待真机验收：允许定位后无需开始行程即可显示速度；结束行程前台继续；无行程后台停止/恢复等待新点；有行程后台继续；拒绝后在系统设置授权并返回恢复。
 
 - 交付启动（北京时间 2026-10-15 22:23:53 +08:00）：按用户要求提交并推送速度修复，在当前功能分支显式触发 build_only=true IPA 构建；此模式仅验证编译与包内容，不运行 Swift/XCTest/XCUITest，结果待 CI 完成后核对精确 SHA。
+
+
+### 步骤 046：实时活动、灵动岛与锁屏续记（北京时间 2026-10-23 15:05:00 +08:00）
+
+- 需求演变：先要求「加实时活动」并给方案；随后澄清「锁屏暂停是权宜之计，能继续记录更好」，并预告后续要接不依赖蓝牙的远程数据源。方案文档两版作废了「锁屏必须暂停」的前提，改为锁屏续记 + 本地优先融合。
+- 数据层：新增 `TelemetrySource` 协议解耦 BLE 依赖，`FusedTelemetrySource` 实现「本地新鲜（≤5s）不请求远程、本地无数据才按需拉取、10s 冷却、旧值不覆盖新值」。远程 `receivedAt` 用设备侧采集时间，因此天然被判过期、跳过能耗配对，只作展示兜底。远程实现本期未接，仅留 `RemoteTelemetryProviding` 与占位实现。
+- 锁屏续记：`BmsBluetoothService` 打开三处 `isForeground` 闸门（暂停、启动定时器、发送查询），后台按 2.5 倍降频；`TripSessionService` 不再 `suspend`，改为 30 秒/30 采样节流落盘并在锁定瞬间强制落盘一次；`TripStore` 改用 `completeFileProtectionUntilFirstUserAuthentication`，锁屏仍可写。
+- 实时活动：`RideActivityAttributes` 放 `Sources/LiveActivity`（不能进 Domain，`Package.swift` 按 macOS 构建会导致 `import ActivityKit` 失败）；新增 `ANTuRideLiveActivity` Widget extension；`RideLiveActivityCoordinator` 只观察不侵入；`LiveActivityUpdatePolicy` 纯函数节流（状态变化立即推、运动 1s / 静止 5s + 阈值）；`pushType` 固定 `.token`（request 时锁定，不可事后修改）。
+- 取舍：不引入 App Group 与任何 entitlement，保证无签名 CI 可构建；展示偏好写进静态 attributes。设置开关用独立 key，未加进版本化 JSON 的 `DrivingSettings`，避免旧存档解码失败回退默认值清空用户配置。
+- CI 收敛（六轮，详见 `docs/CI_BUILD_RESULTS.md` 第 11 节）：①8 处主线程隔离错误 → 协调器整类 `@MainActor`；②appex 缺 `CFBundleVersion` 导致模拟器安装失败 → 扩展补齐版本并加断言；③`FusedTelemetrySource` 每 2 秒无条件给 `@Published` 赋值，整棵视图树反复失效，长按菜单与拖拽被打断（UI 轮次从约 10 分钟涨到 48 分钟）→ 改为仅在值变化时赋值并在无数据源时跳过探测；④剩余 2 例是断言本身：`range.save.settings` 已在 `533b33f` 移除、大字号横屏下「先滚到顶」方向反了。
+- 教训：能编译、能打包 ≠ 能安装；`533b33f`/`d149742` 之后的两次 CI 都是 `build_only`，UI 测试连续 12 天没人跑，断言失修无人发现。
+- 交付：`build/ci/980afed/ANTuRide-unsigned.ipa`，2,424,254 字节，SHA-256 `6b1c37265d5ed2807e949bccb4fc0d3e232c0868b1bed8661d38026f6d224455`；App 0.1.0 (1)、部署目标 16.1、`NSSupportsLiveActivities` 与 `bluetooth-central` 均在包内，appex 版本与宿主一致，无签名材料。
+- 边界：最后一次全量 UI 回归未跑（`39906108735` 被 60 分钟 job 上限取消，`39912155852` 按所有者要求取消测试阶段后仍完成设备构建与包校验）。真机全部未验：活动创建/结束、锁屏 30 分钟续记、过期语义、灵动岛四态、非挖孔机型锁屏卡片、系统关闭实时活动后的降级。以上均已移交所有者，不能以模拟器或 CI 结果替代。

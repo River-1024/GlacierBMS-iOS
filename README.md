@@ -108,3 +108,24 @@ build/ci/latest/ANTuRide-unsigned.ipa    # 指向最近一次被采纳交付的�
 ## 分类参数卡施工（2026-10-12）
 
 三页参数卡与原生布局编辑已进入本地施工，旧首页配置保留并迁移 v3；实现与验收边界见 `docs/PARAMETER_CARD_EDITING_PLAN.md`、`docs/CONSTRUCTION_LOG.md` 步骤 043。Windows 静态检查不等于 Swift/Xcode 编译或真实 iPhone/BMS 验收，旧 IPA 不覆盖本批更改。
+
+
+## 实时活动与锁屏续记（北京时间 2026-10-23 15:05:00 +08:00）
+
+行程记录期间在锁屏与灵动岛显示速度、SOC、功率、里程与计时，并把「锁屏即暂停」的旧行为改成真正的锁屏续记。
+
+- 数据层新增 `TelemetrySource` 抽象与 `FusedTelemetrySource`：本地蓝牙新鲜（≤5s）时优先本地，本地无数据才按需请求远程（10s 冷却），且旧值不覆盖新值。远程实现本期未接，只留协议与占位实现，因此锁屏断连时不会回填云端数据——这是预期行为。
+- 锁屏续记靠三件事：`UIBackgroundModes` 增加 `bluetooth-central`、蓝牙查询在后台按 2.5 倍降频、行程改为 30 秒/30 采样节流落盘并在锁定瞬间强制落盘一次。崩溃丢失面由「上次暂停之后」缩小为「最近 30 秒」。
+- 实时活动为独立 Widget extension `ANTuRideLiveActivity`，四态灵动岛（紧凑/最小/展开/锁屏卡片）；更新按「状态变化立即推、运动 1s、静止 5s + 阈值」节流；`pushType: .token` 已启用但本期无服务端，令牌只记日志。
+- 设置页新增「锁屏与灵动岛」开关（独立 `UserDefaults` key，不写进版本化 JSON 的驾驶设置，避免旧存档解码失败清空用户配置）。系统关闭实时活动时，页面显示橙色降级说明。
+- 数据可信度：缺失值显示 `--` 而不是 0；过期数据在 30 秒内转灰并标注「数据已过期」，不把旧数字当实时值。
+- 部署目标由 16.0 提升到 **16.1**（ActivityKit 最低版本），App 与扩展同步。扩展的 `CFBundleVersion` 必须与宿主一致，否则安装会被系统直接拒绝——CI 已加断言。
+
+构建与验证：
+
+- 构建源码 `980afed`（仅 CI 超时调整），功能代码等价于 `c54c8c4`；Run `39912155852` 完成设备构建与包内校验。
+- 包在校验：`0.1.0 (1)`、`MinimumOSVersion 16.1`、`NSSupportsLiveActivities = true`、`UIBackgroundModes = [location, bluetooth-central]`、`PlugIns/ANTuRideLiveActivity.appex` 版本与宿主一致且 `NSExtensionPointIdentifier = com.apple.widgetkit-extension`；`Assets.car` 与两份隐私清单均在包内；无签名材料，需自行签名安装。
+- IPA：`build/ci/980afed/ANTuRide-unsigned.ipa`（`build/ci/latest/` 为同源副本），2,424,254 字节，SHA-256 `6b1c37265d5ed2807e949bccb4fc0d3e232c0868b1bed8661d38026f6d224455`。
+- 单元测试全绿（含新增融合 7 项、节流 8 项）。**最后一次全量 UI 回归未跑**：`ANTuRideUITests` 12/13、`HomeParameterEditingUITests` 12/13 通过，剩余 1 例经定向单跑通过；合并前需补一次完整回归。
+- 真机验收全部未做（活动创建/结束、锁屏 30 分钟续记、过期语义、灵动岛四态、非挖孔机型锁屏卡片、系统关闭实时活动后的降级），模拟器与 CI 不能替代。
+- 细节见 `docs/LIVE_ACTIVITY_PLAN.md` 第 15 节、`docs/CI_BUILD_RESULTS.md` 第 11 节、`docs/CONSTRUCTION_LOG.md` 步骤 046。
