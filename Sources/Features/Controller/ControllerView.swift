@@ -6,12 +6,14 @@ import SwiftUI
 @MainActor
 struct ControllerView: View {
     @EnvironmentObject private var controller: ControllerBluetoothService
+    @EnvironmentObject private var acceleration: AccelerationService
     @StateObject private var layout = ParameterLayoutStore(page: .controller)
     @State private var showingHistory = false
+    @State private var showingAcceleration = false
 
     var body: some View {
         ParameterCardPage(store: layout, leadingContent: AnyView(connectionContent),
-                          trailingContent: AnyView(historyButton)) { placement in
+                          trailingContent: AnyView(toolEntries)) { placement in
             AnyView(TimelineView(.periodic(from: .now, by: 1)) { context in
                 let telemetry = currentTelemetry(at: context.date)
                 let readout = DeviceParameterReadout.read(controller: telemetry, metricID: placement.id,
@@ -27,6 +29,7 @@ struct ControllerView: View {
         .navigationTitle("控制器")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showingHistory) { ControllerHistoryView() }
+        .navigationDestination(isPresented: $showingAcceleration) { AccelerationView() }
     }
 
     private var connectionContent: some View {
@@ -71,6 +74,33 @@ struct ControllerView: View {
             .padding(16)
             .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+    }
+
+    /// 与"记录与历史"并列的固定工具入口；网格编辑不能移动或隐藏它们。
+    private var toolEntries: some View {
+        VStack(spacing: 8) {
+            accelerationButton
+            historyButton
+        }
+    }
+
+    /// 与设置页入口指向同一测试页，参数仍只在测试页编辑。
+    private var accelerationButton: some View {
+        Button {
+            showingAcceleration = true
+        } label: {
+            HStack(spacing: 8) {
+                Label("加速测试", systemImage: "speedometer")
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                if acceleration.isActive {
+                    Label("测试进行中", systemImage: "record.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.warning)
+                }
+            }
+        }
+        .accessibilityLabel(acceleration.isActive ? "加速测试，测试进行中" : "加速测试")
+        .accessibilityIdentifier("controller.acceleration")
     }
 
     private var historyButton: some View {

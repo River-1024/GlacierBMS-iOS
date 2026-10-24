@@ -36,11 +36,19 @@ public final class AccelerationService: ObservableObject {
     @Published public private(set) var historyError: String?
     @Published public private(set) var pendingSaveRecord: AccelerationRecord?
     @Published public private(set) var lastExportURL: URL?
+    /// 运行读数：耗时仅 running 阶段有值（相对渠道起步时刻）；电流峰值为本次运行累计。
+    @Published public private(set) var elapsedSeconds: Double?
+    @Published public private(set) var peakBusCurrentA: Double?
+    @Published public private(set) var peakPhasePeakCurrentA: Double?
 
     public let historyStore: AccelerationHistoryStore
     private let controller: ControllerBluetoothService
     private let wallClock: () -> Date
     private let monotonicClock: () -> TimeInterval
+    private let conditionsProvider: (@MainActor () -> [String: String])?
+    private let checkpointStore: AccelerationCheckpointStore
+    private let checkpointInterval: TimeInterval
+    private var lastCheckpointWrite: Date?
     private var subscriptions = Set<AnyCancellable>()
     private var activeSession: AccelerationTestSession?
     private var lastReceiptTimestamp: TimeInterval?
@@ -52,14 +60,20 @@ public final class AccelerationService: ObservableObject {
         controller: ControllerBluetoothService,
         historyStore: AccelerationHistoryStore = AccelerationHistoryStore(),
         wallClock: @escaping () -> Date = Date.init,
-        monotonicClock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        monotonicClock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        conditionsProvider: (@MainActor () -> [String: String])? = nil,
+        checkpointStore: AccelerationCheckpointStore = AccelerationCheckpointStore(),
+        checkpointInterval: TimeInterval = 2
     ) {
         self.controller = controller
         self.historyStore = historyStore
         self.wallClock = wallClock
         self.monotonicClock = monotonicClock
+        self.conditionsProvider = conditionsProvider
+        self.checkpointStore = checkpointStore
+        self.checkpointInterval = checkpointInterval
         self.controllerState = controller.state
-        reloadHistory()
+        recoverFromCheckpoint()
         subscribeToController()
         Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
             .sink { [weak self] _ in self?.tick() }
@@ -96,7 +110,7 @@ public final class AccelerationService: ObservableObject {
         let config = AccelerationConfig(targetSpeedKmh: targetSpeedKmh,
             rpmKmhPerUnit: rpmKmhPerUnit, rpmForwardSign: rpmForwardSign,
             algorithmVersion: "rpm-receipt-acceleration-v1")
-        let conditions = [
+        var conditions = [
             "测速渠道": "控制器原始 RPM 单渠道",
             "换算公式": "速度(km/h) = rawRPM × 系数 × forwardSign",
             "系数来源": "用户设定；默认 0.0782，不代表已实车校准",
@@ -105,16 +119,25 @@ public final class AccelerationService: ObservableObject {
             "控制器": controller.connectedDeviceName ?? "未命名控制器",
             "传感器边界": "未接入 GPS/IMU；不生成模拟结果"
         ]
+        // 开始时刻的环境快照（SOC/电压/温度等）来自组合根注入；无连接的键不出现，不造值。
+        for (key, value) in conditionsProvider?() ?? [:] where !value.isEmpty {
+            conditions[key] = value
+        }
         let session = AccelerationTestSession(config: config)
         let started = try session.start(at: monotonicClock(), date: wallClock(),
                                        id: UUID().uuidString, conditions: conditions)
         activeSession = session
         lastSampleTimestamp = nil
         sequence = 0
+        elapsedSeconds = nil
+        peakBusCurrentA = nil
+        peakPhasePeakCurrentA = nil
+        lastCheckpointWrite = nil
         displayConfig = config
         currentSpeedKmh = currentRPM.flatMap { config.rpmSpeedMps(rawRpm: Double($0)) }.map { $0 * 3.6 }
         record = started
         lastError = nil
+        writeCheckpointIfDue(started)
         // Do not replay the cached pre-start snapshot as a new sample.
     }
 
@@ -143,6 +166,37 @@ public final class AccelerationService: ObservableObject {
             if self.record?.id == record.id { self.record = nil }
             historyError = nil
         } catch { historyError = "删除失败：\(error.localizedDescription)" }
+    }
+
+    /// 批量删除历史记录；进行中或未保存的记录跳过，结果汇总进 historyError。
+    public func delete(_ records: [AccelerationRecord]) {
+        var deletedCount = 0
+        var skippedCount = 0
+        var failedCount = 0
+        var lastFailure: String?
+        for record in records {
+            guard pendingSaveRecord?.id != record.id, !record.isActive else {
+                skippedCount += 1
+                continue
+            }
+            do {
+                try historyStore.delete(id: record.id)
+                self.records.removeAll { $0.id == record.id }
+                if self.record?.id == record.id { self.record = nil }
+                deletedCount += 1
+            } catch {
+                failedCount += 1
+                lastFailure = error.localizedDescription
+            }
+        }
+        if skippedCount == 0, failedCount == 0 {
+            historyError = nil
+        } else {
+            var summary = ["已删除 \(deletedCount) 条"]
+            if skippedCount > 0 { summary.append("跳过 \(skippedCount) 条进行中/未保存记录") }
+            if failedCount > 0 { summary.append("\(failedCount) 条删除失败\(lastFailure.map { "：\($0)" } ?? "")") }
+            historyError = summary.joined(separator: "；")
+        }
     }
 
     @discardableResult
@@ -209,6 +263,15 @@ public final class AccelerationService: ObservableObject {
         currentRPM = telemetry.rpm
         busCurrentA = finite(telemetry.busCurrentA)
         phasePeakCurrentA = finite(telemetry.phasePeakCurrentA)
+        if activeSession?.isActive == true {
+            // 峰值按幅值比较、保留原符号：加速放电时母线电流为负，直接 max 会丢掉大幅值。
+            if let bus = finite(telemetry.busCurrentA), abs(bus) >= abs(peakBusCurrentA ?? 0) {
+                peakBusCurrentA = bus
+            }
+            if let phase = finite(telemetry.phasePeakCurrentA), abs(phase) >= abs(peakPhasePeakCurrentA ?? 0) {
+                peakPhaseCurrentA = phase
+            }
+        }
         currentSpeedKmh = displayConfig.rpmSpeedMps(rawRpm: Double(telemetry.rpm)).map { $0 * 3.6 }
         if snapshot.timingAmbiguous {
             let reason = "多帧合批无法确定帧间时序，不能用于加速计时"
@@ -249,6 +312,7 @@ public final class AccelerationService: ObservableObject {
             session.tick(at: timestamp)
             publishAndPersistIfFinished(session)
         }
+        updateElapsed(at: timestamp)
     }
 
     private func clearLiveValues() {
@@ -258,6 +322,7 @@ public final class AccelerationService: ObservableObject {
         currentSpeedKmh = nil
         busCurrentA = nil
         phasePeakCurrentA = nil
+        if elapsedSeconds != nil { elapsedSeconds = nil }
     }
 
     private func finishActive(reason: String, interrupted: Bool) {
@@ -273,7 +338,10 @@ public final class AccelerationService: ObservableObject {
     private func publishAndPersistIfFinished(_ session: AccelerationTestSession) {
         guard let updated = session.record else { return }
         record = updated
-        guard !updated.isActive else { return }
+        guard !updated.isActive else {
+            writeCheckpointIfDue(updated)
+            return
+        }
         activeSession = nil
         persist(updated)
     }
@@ -283,6 +351,7 @@ public final class AccelerationService: ObservableObject {
             try historyStore.save(record)
             pendingSaveRecord = nil
             historyError = nil
+            checkpointStore.clear()
             records.removeAll { $0.id == record.id }
             records.insert(record, at: 0)
             records.sort { $0.startedAt > $1.startedAt }
@@ -290,6 +359,49 @@ public final class AccelerationService: ObservableObject {
             pendingSaveRecord = record
             historyError = "记录保存失败，可重试：\(error.localizedDescription)"
         }
+    }
+
+    /// 崩溃兜底：start 立即写一次，之后按 checkpointInterval 节流写最新快照。
+    private func writeCheckpointIfDue(_ record: AccelerationRecord) {
+        guard record.isActive else { return }
+        let now = wallClock()
+        if let last = lastCheckpointWrite, now.timeIntervalSince(last) < checkpointInterval { return }
+        lastCheckpointWrite = now
+        checkpointStore.write(record)
+    }
+
+    /// 耗时只在 running 阶段有意义：armed 等待起步时显示伪零会误导计时。
+    /// 相同值不重发，避免 10Hz tick 触发无意义的界面刷新。
+    private func updateElapsed(at timestamp: TimeInterval) {
+        let value: Double?
+        if let record, record.isActive,
+           let start = record.result(for: .rpm)?.startTimestamp {
+            let elapsed = timestamp - start
+            value = elapsed.isFinite && elapsed >= 0 ? elapsed : nil
+        } else {
+            value = nil
+        }
+        if value != elapsedSeconds { elapsedSeconds = value }
+    }
+
+    /// 启动时把崩溃残留的进行中检查点转成"已中断"记录；转换结果仍走历史校验落盘。
+    private func recoverFromCheckpoint() {
+        var corrupt = false
+        switch checkpointStore.recover() {
+        case .none:
+            break
+        case .record(let recovered):
+            do {
+                try historyStore.save(recovered)
+                checkpointStore.clear()
+            } catch {
+                historyError = "检查点恢复失败：\(error.localizedDescription)"
+            }
+        case .corrupt:
+            corrupt = true
+        }
+        reloadHistory()
+        if corrupt { historyError = "发现损坏的进行中检查点，已丢弃；已保存历史不受影响。" }
     }
 
     private func finite(_ value: Double) -> Double? { value.isFinite ? value : nil }

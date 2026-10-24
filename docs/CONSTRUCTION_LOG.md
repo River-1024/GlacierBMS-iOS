@@ -660,3 +660,15 @@
 - 教训：能编译、能打包 ≠ 能安装；`533b33f`/`d149742` 之后的两次 CI 都是 `build_only`，UI 测试连续 12 天没人跑，断言失修无人发现。
 - 交付：`build/ci/980afed/ANTuRide-unsigned.ipa`，2,424,254 字节，SHA-256 `6b1c37265d5ed2807e949bccb4fc0d3e232c0868b1bed8661d38026f6d224455`；App 0.1.0 (1)、部署目标 16.1、`NSSupportsLiveActivities` 与 `bluetooth-central` 均在包内，appex 版本与宿主一致，无签名材料。
 - 边界：最后一次全量 UI 回归未跑（`39906108735` 被 60 分钟 job 上限取消，`39912155852` 按所有者要求取消测试阶段后仍完成设备构建与包校验）。真机全部未验：活动创建/结束、锁屏 30 分钟续记、过期语义、灵动岛四态、非挖孔机型锁屏卡片、系统关闭实时活动后的降级。以上均已移交所有者，不能以模拟器或 CI 结果替代。
+
+
+### 步骤 047：加速测试对齐上游升级（控制器入口 + P1–P3）（北京时间 2026-10-25）
+
+- 方案：对照上游 `GPS_ANT_BMS` 加速测试（引擎常数 iOS 已对齐，差距在呈现与记录健壮性），按用户确认实施全部 P0–P3，并明确只用 iOS 原生控件/样式/库。详见 `docs/ACCELERATION_PARITY_UPGRADE_PLAN.md`。
+- P0 入口：`ControllerView` trailing 工具区新增「加速测试」按钮（`controller.acceleration`），与「记录与历史」并列；测试进行中显示 warning 色「测试进行中」；`navigationDestination` 跳转同一测试页。MASTER.md §2.1 控制器职责同步补一句。
+- P1 测试页（`AccelerationView` 重写）：顶部安全警示行；快捷目标 segmented「0–50 / 0–80 / 自定义」与 @AppStorage 目标双向同步；进行中参数折叠为只读行 + hero（大号速度、仅 running 显示已用时、母线/相线电流实时+峰值）；达标结果 hero（success 色 + checkmark）；`.completed` 时 3 次 success 触感（替代上游闪屏+蜂鸣，天然兼容减少动态效果）。
+- P2 曲线：新文件 `AccelerationRecordCharts.swift`——`AccelerationChartSeriesBuilder` 纯函数（>50 ms 间隙切连线区间、每区间 ≤640 点分桶保首/末/极值、合批电流只出孤立点）+ Swift Charts 双图共享时间轴（速度图 + 电流图，相线虚线，t0/达标 RuleMark，仅最终目标标注，VoiceOver 文字摘要）；详情页插在分段结果与采样质量之间。iOS 16 无双 Y 轴，两图堆叠为记录在案的替代决策。
+- P3 健壮性：`AccelerationCheckpointStore`（独立目录 in-progress.json、utility 串行队列、start 即写 + 2 秒节流、正常保存即清、启动恢复为 interrupted、损坏丢弃并提示）；领域新增 `AccelerationRecordRecovery.swift` 扩展（不改既有算法/常数）；服务新增批量 `delete(_:)`（进行中/未保存跳过并汇总）、`conditionsProvider` 注入；历史 Section 系统编辑模式多选删除 + confirmationDialog；组合根注入 BMS/控制器开始时刻环境快照（未连接不造值）。
+- 服务其他新增：`elapsedSeconds`（tick 10 Hz、值不变不重发）、`peakBusCurrentA`/`peakPhaseCurrentA`（按幅值取最大保留符号——加速放电母线电流为负）。
+- 测试：AppTests 新增 6 个服务用例（条件快照、耗时/峰值语义、检查点恢复/清除/损坏、批量删除守卫）与 `AccelerationChartSeriesTests` 3 个纯函数用例（withServices 基建注入隔离检查点目录）；UITests 新增控制器入口往返与快捷目标联动 2 个用例。
+- 本地验证：仅源码静态审查与 git diff --check（Windows 无 Swift/Xcode），未编译、未跑 XCTest/XCUITest、未产 IPA；不能以既往 CI 结果覆盖本轮。待 macOS CI 与真机/车辆验收项见方案文档第 6 节。改动保留本地未提交。

@@ -1,5 +1,6 @@
 import ANTuRideDomain
 import SwiftUI
+import UIKit
 
 /// Uses the composition root's shared service; this page never starts BLE polling,
 /// owns a second session, or generates synthetic acceleration results.
@@ -10,6 +11,25 @@ struct AccelerationView: View {
     @AppStorage("acceleration.targetSpeedText") private var targetText = "50"
     @AppStorage("acceleration.forwardSign") private var forwardSign = 1
     @State private var inputError: String?
+    @State private var quickTarget: QuickTarget = .custom
+    @State private var selectedRecordIDs: Set<String> = []
+    @State private var confirmingBatchDeletion = false
+    @State private var lastPhase: AccelerationPhase?
+
+    /// 常用目标与自定义输入并存：手动输入 50/80 会自动选中对应快捷项。
+    enum QuickTarget: Int, CaseIterable, Identifiable {
+        case kmh50 = 50
+        case kmh80 = 80
+        case custom = 0
+        var id: Int { rawValue }
+        var label: String {
+            switch self {
+            case .kmh50: return "0–50"
+            case .kmh80: return "0–80"
+            case .custom: return "自定义"
+            }
+        }
+    }
 
     private var coefficient: Double? { decimal(coefficientText) }
     private var target: Double? { decimal(targetText) }
@@ -24,40 +44,62 @@ struct AccelerationView: View {
         let speed = Double(raw) * coefficient * Double(forwardSign)
         return speed.isFinite ? speed : nil
     }
+    private var liveResult: AccelerationChannelResult? { acceleration.record?.result(for: .rpm) }
 
     var body: some View {
-        List {
+        List(selection: $selectedRecordIDs) {
+            Section {
+                Label("安全提醒：仅在合法封闭场地测试；行驶中不要操作手机。", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(AppTheme.warning)
+            }
             Section("RPM 单渠道 · 实时数据") {
+                if acceleration.isActive { liveHero }
                 accelerationValueRow("控制器", acceleration.controllerState.text)
                 accelerationValueRow("可用于计时的完整帧", acceleration.hasFreshSnapshot ? "500 ms 内收到非合批帧" : "无有效帧 / 合批 / 超时")
                 accelerationValueRow("原始 RPM", acceleration.currentRPM.map { String($0) } ?? "--")
-                accelerationValueRow("换算速度", accelerationNumber(displayedSpeed, unit: "km/h"))
-                accelerationValueRow("母线电流", accelerationNumber(acceleration.busCurrentA, unit: "A"))
-                accelerationValueRow("相线峰值电流", accelerationNumber(acceleration.phasePeakCurrentA, unit: "A"))
+                if !acceleration.isActive {
+                    accelerationValueRow("换算速度", accelerationNumber(displayedSpeed, unit: "km/h"))
+                    accelerationValueRow("母线电流", accelerationNumber(acceleration.busCurrentA, unit: "A"))
+                    accelerationValueRow("相线峰值电流", accelerationNumber(acceleration.phasePeakCurrentA, unit: "A"))
+                }
                 NavigationLink("前往蓝牙设备设置") { BluetoothDevicesView() }
             }
             Section {
-                HStack {
-                    Text("RPM 系数")
-                    TextField("0.0782", text: $coefficientText)
-                        .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                        .accessibilityIdentifier("acceleration-coefficient")
+                if acceleration.isActive {
+                    LabeledContent("测试配置 · 进行中已锁定") {
+                        Text("系数 \(coefficientText) · 目标 \(targetText) km/h · 方向 \(forwardSign == 1 ? "+1" : "−1")")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                } else {
+                    Picker("快捷目标", selection: $quickTarget) {
+                        ForEach(QuickTarget.allCases) { item in
+                            Text(item.label).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("acceleration-quick-target")
+                    HStack {
+                        Text("RPM 系数")
+                        TextField("0.0782", text: $coefficientText)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("acceleration-coefficient")
+                    }
+                    HStack {
+                        Text("目标速度 km/h")
+                        TextField("50", text: $targetText)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("acceleration-target")
+                    }
+                    Picker("正向 RPM 符号", selection: $forwardSign) {
+                        Text("+1 · 正 RPM 为前进").tag(1)
+                        Text("−1 · 负 RPM 为前进").tag(-1)
+                    }
+                    .accessibilityIdentifier("acceleration-direction")
                 }
-                HStack {
-                    Text("目标速度 km/h")
-                    TextField("50", text: $targetText)
-                        .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                        .accessibilityIdentifier("acceleration-target")
-                }
-                Picker("正向 RPM 符号", selection: $forwardSign) {
-                    Text("+1 · 正 RPM 为前进").tag(1)
-                    Text("−1 · 负 RPM 为前进").tag(-1)
-                }
-                .accessibilityIdentifier("acceleration-direction")
             } header: { Text("本次参数") } footer: {
                 Text("速度 km/h = rawRPM × 系数 × forwardSign。默认系数 0.0782 只是预设，不代表已实车校准；请核对实际前进方向。目标范围 10–200 km/h，系数须为正有限数。")
             }
-            .disabled(acceleration.isActive)
 
             Section {
                 if acceleration.isActive {
@@ -72,14 +114,27 @@ struct AccelerationView: View {
                 if let inputError { Text(inputError).foregroundStyle(AppTheme.danger) }
                 if let error = acceleration.lastError { Text(error).foregroundStyle(AppTheme.warning) }
                 if let record = acceleration.record {
-                    accelerationValueRow("本次状态", accelerationPhaseText(record.phase))
-                    if let result = record.result(for: .rpm) {
-                        accelerationValueRow("RPM 阶段", accelerationChannelText(result.state))
-                        accelerationValueRow("已确认分段", "\(result.splits.count) / \(record.config.targetsKmh.count)")
-                        if let reason = result.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+                    if record.isActive {
+                        accelerationValueRow("本次状态", accelerationPhaseText(record.phase))
+                        if let result = liveResult {
+                            accelerationValueRow("RPM 阶段", accelerationChannelText(result.state))
+                            accelerationValueRow("已确认分段", "\(result.splits.count) / \(record.config.targetsKmh.count)")
+                        }
+                    } else if let result = record.result(for: .rpm), result.state == .reached,
+                              let last = result.splits.last {
+                        finishedHero(targetKmh: last.targetSpeedKmh, seconds: last.cumulativeSeconds,
+                                     splits: result.splits, distance: last.distanceMeters)
+                    } else {
+                        accelerationValueRow("本次状态", accelerationPhaseText(record.phase))
+                        if let result = record.result(for: .rpm) {
+                            accelerationValueRow("RPM 阶段", accelerationChannelText(result.state))
+                            accelerationValueRow("已确认分段", "\(result.splits.count) / \(record.config.targetsKmh.count)")
+                            if let reason = result.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+                        }
                     }
                     if !record.isActive {
                         NavigationLink("查看本次详情") { AccelerationDetailView(record: record) }
+                            .accessibilityIdentifier("acceleration-detail")
                     }
                 }
             } header: { Text("测试") } footer: {
@@ -100,7 +155,7 @@ struct AccelerationView: View {
                 }
             }
 
-            Section("本机 JSON 历史") {
+            Section {
                 if acceleration.records.isEmpty { Text("暂无已保存记录").foregroundStyle(.secondary) }
                 ForEach(acceleration.records) { record in
                     NavigationLink {
@@ -112,7 +167,20 @@ struct AccelerationView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                    .tag(record.id)
                 }
+                if !selectedRecordIDs.isEmpty {
+                    Button(role: .destructive) {
+                        confirmingBatchDeletion = true
+                    } label: {
+                        Label("删除所选（\(selectedRecordIDs.count)）", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("acceleration-delete-selected")
+                }
+            } header: {
+                Text("本机 JSON 历史")
+            } footer: {
+                Text("右上角\"编辑\"进入多选；所选记录连同全部分段与样本一起删除，无法恢复。")
             }
             Section("结果边界") {
                 Text("时间取自手机接收完整控制器快照事件时的单调时钟，不是硬件测量时刻。分段计时包含蓝牙和手机调度延迟，是接收时序估计；未接入 GPS / IMU，也没有模拟结果或自动校准。")
@@ -121,8 +189,109 @@ struct AccelerationView: View {
         }
         .navigationTitle("加速测试")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !acceleration.records.isEmpty {
+                ToolbarItem(placement: .navigationBarTrailing) { EditButton() }
+            }
+        }
+        .confirmationDialog("删除已选 \(selectedRecordIDs.count) 条记录？", isPresented: $confirmingBatchDeletion,
+                            titleVisibility: .visible) {
+            Button("永久删除", role: .destructive) {
+                let selected = acceleration.records.filter { selectedRecordIDs.contains($0.id) }
+                acceleration.delete(selected)
+                selectedRecordIDs.removeAll()
+            }
+            .accessibilityIdentifier("acceleration-delete-selected-confirm")
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将永久删除已选记录及其全部分段与速度/电流样本，无法恢复。")
+        }
+        .onAppear {
+            quickTarget = quickTarget(matching: targetText)
+            lastPhase = acceleration.record?.phase
+        }
+        .onChange(of: targetText) { text in
+            quickTarget = quickTarget(matching: text)
+            inputError = nil
+        }
+        .onChange(of: quickTarget) { item in
+            // 自定义不清空输入；快捷项把输入框规范为对应值。
+            if item == .kmh50 { targetText = "50" }
+            if item == .kmh80 { targetText = "80" }
+        }
         .onChange(of: coefficientText) { _ in inputError = nil }
-        .onChange(of: targetText) { _ in inputError = nil }
+        .onChange(of: acceleration.record?.phase) { phase in
+            defer { lastPhase = phase }
+            guard phase == .completed, lastPhase != .completed else { return }
+            fireCompletionFeedback()
+        }
+    }
+
+    /// 进行中的主读数：大号速度 + 已用时 + 电流实时/峰值；armed 阶段不显示伪零耗时。
+    private var liveHero: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(liveResult.map { accelerationChannelText($0.state) } ?? accelerationPhaseText(.armed))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                if let elapsed = acceleration.elapsedSeconds {
+                    Text("已用时 \(String(format: "%.1f", elapsed)) s")
+                        .font(.headline).monospacedDigit()
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(accelerationNumber(acceleration.currentSpeedKmh, unit: ""))
+                    .font(.largeTitle.weight(.semibold)).monospacedDigit()
+                Text("km/h").foregroundStyle(.secondary)
+            }
+            accelerationValueRow("母线电流", currentWithPeak(acceleration.busCurrentA, acceleration.peakBusCurrentA))
+            accelerationValueRow("相线峰值电流", currentWithPeak(acceleration.phasePeakCurrentA, acceleration.peakPhasePeakCurrentA))
+        }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("acceleration-live-hero")
+    }
+
+    /// 结束且达标的总成绩；未达标的阶段与原因由常规行展示。
+    private func finishedHero(targetKmh: Double, seconds: Double, splits: [AccelerationSplit], distance: Double) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("总成绩 0–\(accelerationNumber(targetKmh, unit: "km/h"))", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(AppTheme.success)
+            Text("\(accelerationNumber(seconds, unit: "")) s")
+                .font(.largeTitle.weight(.semibold)).monospacedDigit()
+                .foregroundStyle(AppTheme.success)
+            Text("已确认分段 \(splits.count) · RPM 换算距离 \(accelerationNumber(distance, unit: "m"))")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("acceleration-result-hero")
+    }
+
+    /// 达标完成反馈：3 次 success 触感（间隔 0.3 s）。替代上游的闪屏+蜂鸣：
+    /// 无闪烁动画天然兼容"减少动态效果"；系统音效无稳定公开 API 且受静音键影响，不采用。
+    private func fireCompletionFeedback() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        generator.notificationOccurred(.success)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            generator.notificationOccurred(.success)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            generator.notificationOccurred(.success)
+        }
+    }
+
+    private func currentWithPeak(_ current: Double?, _ peak: Double?) -> String {
+        var parts = [accelerationNumber(current, unit: "A")]
+        if let peak { parts.append("峰值 \(accelerationNumber(peak, unit: "A"))") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func quickTarget(matching text: String) -> QuickTarget {
+        guard let value = decimal(text), value.isFinite else { return .custom }
+        if value == Double(QuickTarget.kmh50.rawValue) { return .kmh50 }
+        if value == Double(QuickTarget.kmh80.rawValue) { return .kmh80 }
+        return .custom
     }
 
     private func start() {

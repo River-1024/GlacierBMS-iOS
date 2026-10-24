@@ -31,11 +31,33 @@ struct ANTuRideApp: App {
             startupAutoConnectEnabled: driving.settings.controllerAutoConnectEnabled,
             createsBluetoothManager: createsBluetoothManager, registry: registry)
         _controllerService = StateObject(wrappedValue: controller)
-        _accelerationService = StateObject(wrappedValue: AccelerationService(controller: controller))
         _drivingSettings = StateObject(wrappedValue: driving)
         let bms = BmsBluetoothService(defaults: defaults, startupAutoConnectEnabled: driving.settings.bmsAutoConnectEnabled,
                                       queryIntervalMs: driving.settings.bluetoothRefreshIntervalMs,
                                       createsBluetoothManager: createsBluetoothManager, registry: registry)
+        // 加速开始时刻的环境快照：只读取既有只读状态，不新增轮询或隐私边界；
+        // 未连接的设备如实记录"未连接"，不补造数值。
+        let accelerationConditions: @MainActor () -> [String: String] = { [weak bms, weak controller] in
+            var values: [String: String] = [:]
+            if let snapshot = bms?.latestSnapshot {
+                values["开始时 SOC"] = String(format: "%.0f%%", snapshot.soc)
+                values["开始时电池电压"] = String(format: "%.1f V", snapshot.totalVoltage)
+                if let hottest = snapshot.temperatures.max() {
+                    values["开始时 BMS 最高温度"] = "\(hottest) ℃"
+                }
+                values["开始时 MOS 温度"] = "\(snapshot.mosTemperature) ℃"
+            } else {
+                values["开始时 BMS"] = "未连接"
+            }
+            if let telemetry = controller?.latestTelemetry {
+                values["开始时控制器电压"] = String(format: "%.1f V", telemetry.controllerVoltageV)
+                values["开始时控制器温度"] = "\(telemetry.controllerTemperatureC) ℃"
+                values["开始时电机温度"] = "\(telemetry.motorTemperatureC) ℃"
+            }
+            return values
+        }
+        _accelerationService = StateObject(wrappedValue: AccelerationService(controller: controller,
+                                                                             conditionsProvider: accelerationConditions))
         // 所有 UI 测试均不触发系统定位授权，避免遮挡页面操作。
         let location = LocationService(createsLocationManager: Self.createsLocationManager())
         let fused = FusedTelemetrySource(local: bms)

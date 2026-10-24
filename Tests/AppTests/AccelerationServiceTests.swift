@@ -450,6 +450,144 @@ final class AccelerationServiceTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testConditionsProviderSnapshotMergesIntoRecordAndDropsEmptyValues() throws {
+        try withServices(conditionsProvider: { ["开始时 SOC": "87%", "开始时电池电压": "72.3 V", "开始时 BMS": ""] }) { controller, service, _, _ in
+            ready(controller)
+            receive(controller, rpm: 0)
+            try service.start()
+            let conditions = try XCTUnwrap(service.record).conditions
+            XCTAssertEqual(conditions["开始时 SOC"], "87%")
+            XCTAssertEqual(conditions["开始时电池电压"], "72.3 V")
+            XCTAssertNil(conditions["开始时 BMS"], "空值不写入，不造键")
+            XCTAssertTrue(conditions["时间基准"]?.contains("不是控制器硬件测量时刻") == true)
+        }
+    }
+
+    @MainActor
+    func testElapsedOnlyAfterDepartureAndCurrentPeaksTrackMagnitude() throws {
+        try withServices { controller, service, clock, _ in
+            ready(controller)
+            receive(controller, rpm: 0)
+            try service.start(targetSpeedKmh: 50, rpmKmhPerUnit: 1)
+            let base = clock.monotonic
+            for index in 0...21 {
+                clock.setUptime(base + Double(index) / 10)
+                receive(controller, rpm: 0)
+            }
+            XCTAssertNil(service.elapsedSeconds, "静止等待阶段不显示伪零耗时")
+            clock.advance(0.1)
+            receive(controller, rpm: 2, busTenths: -100) // 首个 ≥1 km/h 运动候选
+            clock.advance(0.1)
+            receive(controller, rpm: 5, busTenths: -250) // 第二候选确认起步，进入 running
+            service.tick()
+            XCTAssertNotNil(service.elapsedSeconds)
+            XCTAssertGreaterThan(try XCTUnwrap(service.elapsedSeconds), 0)
+            // 峰值按幅值取最大且保留符号：-25 A 的幅值大于 -10 A。
+            XCTAssertEqual(try XCTUnwrap(service.peakBusCurrentA), -25.0, accuracy: 0.05)
+            XCTAssertEqual(try XCTUnwrap(service.peakPhaseCurrentA), 20.0, accuracy: 0.05)
+            service.stop()
+            service.tick()
+            XCTAssertNil(service.elapsedSeconds, "结束后清空，避免把上次耗时当作新测试数据")
+        }
+    }
+
+    @MainActor
+    func testCheckpointRecoversActiveRunAsInterruptedRecord() throws {
+        try withServices(checkpointInterval: 0) { controller, service, clock, root in
+            ready(controller)
+            receive(controller, rpm: 0)
+            try service.start()
+            clock.advance(0.1)
+            receive(controller, rpm: 0)
+            let checkpoint = AccelerationCheckpointStore(directory: root.appendingPathComponent("checkpoint"))
+            XCTAssertTrue(waitForFile(checkpoint.fileURL), "start 后应写入检查点")
+            // 模拟进程被杀：旧会话不 finish，同一目录构造新服务启动恢复。
+            let recovered = AccelerationService(controller: controller,
+                historyStore: AccelerationHistoryStore(directory: root.appendingPathComponent("acceleration")),
+                wallClock: { clock.date }, monotonicClock: { clock.monotonic + 1_000 },
+                checkpointStore: AccelerationCheckpointStore(directory: root.appendingPathComponent("checkpoint")))
+            XCTAssertEqual(recovered.records.count, 1)
+            let record = try XCTUnwrap(recovered.records.first)
+            XCTAssertEqual(record.phase, .interrupted)
+            XCTAssertEqual(record.endReason, AccelerationCheckpointStore.recoveryEndReason)
+            XCTAssertFalse(record.isActive)
+            XCTAssertNil(recovered.pendingSaveRecord, "恢复记录直接落盘，不阻塞下一次测试")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: checkpoint.fileURL.path), "恢复落盘后清除检查点")
+        }
+    }
+
+    @MainActor
+    func testCheckpointFileClearedAfterNormalFinish() throws {
+        try withServices(checkpointInterval: 0) { controller, service, clock, root in
+            let checkpoint = AccelerationCheckpointStore(directory: root.appendingPathComponent("checkpoint"))
+            ready(controller)
+            receive(controller, rpm: 0)
+            try service.start()
+            XCTAssertTrue(waitForFile(checkpoint.fileURL))
+            clock.advance(0.1)
+            receive(controller, rpm: 0)
+            service.stop()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: checkpoint.fileURL.path), "正常保存后删除检查点")
+            XCTAssertEqual(service.records.count, 1)
+        }
+    }
+
+    @MainActor
+    func testCorruptCheckpointIsDiscardedAndReported() throws {
+        try withServices { controller, service, _, root in
+            let checkpoint = AccelerationCheckpointStore(directory: root.appendingPathComponent("checkpoint"))
+            try FileManager.default.createDirectory(at: checkpoint.fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try Data("not-json".utf8).write(to: checkpoint.fileURL)
+            let recovered = AccelerationService(controller: controller, historyStore: service.historyStore,
+                wallClock: { Date() }, monotonicClock: { 100 }, checkpointStore: checkpoint)
+            XCTAssertEqual(recovered.records.count, 0)
+            XCTAssertTrue(recovered.historyError?.contains("损坏") == true)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: checkpoint.fileURL.path))
+        }
+    }
+
+    @MainActor
+    func testBatchDeleteRemovesSavedRecordsAndSkipsActiveOnes() throws {
+        try withServices { controller, service, clock, _ in
+            ready(controller)
+            receive(controller, rpm: 0)
+            for index in 0..<2 {
+                if index > 0 {
+                    clock.advance(0.1)
+                    receive(controller, rpm: 0)
+                }
+                try service.start()
+                clock.advance(0.1)
+                receive(controller, rpm: 0)
+                service.stop()
+            }
+            XCTAssertEqual(service.records.count, 2)
+            service.delete(service.records)
+            XCTAssertEqual(service.records.count, 0)
+            XCTAssertNil(service.historyError)
+
+            clock.advance(0.1)
+            receive(controller, rpm: 0)
+            try service.start()
+            service.delete([try XCTUnwrap(service.record)])
+            XCTAssertTrue(service.isActive, "进行中的记录不能被批量删除")
+            XCTAssertTrue(service.historyError?.contains("跳过 1 条") == true)
+            service.stop()
+        }
+    }
+
+    /// 检查点写入在后台串行队列执行；测试轮询文件出现，避免固定 sleep。
+    private func waitForFile(_ url: URL, timeout: TimeInterval = 2) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: url.path) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     @MainActor private func ready(_ controller: ControllerBluetoothService) {
         controller.setPollingEnabled(true)
         controller.prepareSession(deviceID: UUID(), name: "APT test fixture")
@@ -483,6 +621,8 @@ final class AccelerationServiceTests: XCTestCase {
     }
 
     @MainActor private func withServices(blockHistory: Bool = false,
+        conditionsProvider: (@MainActor () -> [String: String])? = nil,
+        checkpointInterval: TimeInterval = 2,
         _ body: (ControllerBluetoothService, AccelerationService, Clock, URL) throws -> Void) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("AccelerationTests-\(UUID())", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -492,7 +632,10 @@ final class AccelerationServiceTests: XCTestCase {
         let history = root.appendingPathComponent("acceleration")
         if blockHistory { try Data("blocked".utf8).write(to: history) }
         let service = AccelerationService(controller: controller, historyStore: AccelerationHistoryStore(directory: history),
-            wallClock: { clock.date }, monotonicClock: { clock.monotonic })
+            wallClock: { clock.date }, monotonicClock: { clock.monotonic },
+            conditionsProvider: conditionsProvider,
+            checkpointStore: AccelerationCheckpointStore(directory: root.appendingPathComponent("checkpoint")),
+            checkpointInterval: checkpointInterval)
         defer {
             controller.disconnect()
             try? FileManager.default.removeItem(at: root) // UUID-named test sandbox only

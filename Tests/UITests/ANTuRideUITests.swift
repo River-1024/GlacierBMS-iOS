@@ -272,6 +272,41 @@ final class ANTuRideUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
     }
 
+    func testControllerTabLinksToAccelerationTool() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-bluetooth-empty"]
+        launch(app)
+        app.tabBars.buttons["控制器"].tap()
+        XCTAssertTrue(app.navigationBars["控制器"].waitForExistence(timeout: 5))
+        let entry = app.buttons["controller.acceleration"]
+        scrollUntilVisible(entry, in: app)
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["加速测试"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["RPM 单渠道 · 实时数据"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["控制器"].waitForExistence(timeout: 5))
+    }
+
+    func testAccelerationQuickTargetsUpdateTargetInput() {
+        let app = XCUIApplication()
+        launch(app)
+        app.tabBars.buttons["设置"].tap()
+        let entry = app.buttons["settings.acceleration"]
+        scrollUntilVisible(entry, in: app)
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["加速测试"].waitForExistence(timeout: 5))
+        let picker = app.segmentedControls["acceleration-quick-target"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.buttons["0–80"].tap()
+        let target = app.textFields["acceleration-target"]
+        scrollUntilVisible(target, in: app)
+        XCTAssertEqual(target.value as? String, "80", "快捷目标同步目标速度输入")
+        picker.buttons["自定义"].tap()
+        XCTAssertEqual(target.value as? String, "80", "切到自定义不改动当前输入")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+    }
+
     private func launch(_ app: XCUIApplication) {
         // 保留各用例的 seeded/empty 场景；没有设置测试标记时补上禁 BLE 的启动标记。
         let isolatedFlags = ["--ui-test-settings-seeded", "--ui-test-bluetooth-empty", "--ui-test-bluetooth-seeded"]

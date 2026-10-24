@@ -56,6 +56,7 @@ struct AccelerationDetailView: View {
                     if let warning = result.lastQualityWarning { Text(warning).font(.footnote) }
                 }
             }
+            AccelerationRecordChartsSection(record: record)
             Section("采样质量") {
                 accelerationValueRow("速度 / 电流样本", "\(record.speedSamples.count) / \(record.currentSamples.count)")
                 if let result {
