@@ -485,7 +485,7 @@ final class AccelerationServiceTests: XCTestCase {
             XCTAssertGreaterThan(try XCTUnwrap(service.elapsedSeconds), 0)
             // 峰值按幅值取最大且保留符号：-25 A 的幅值大于 -10 A。
             XCTAssertEqual(try XCTUnwrap(service.peakBusCurrentA), -25.0, accuracy: 0.05)
-            XCTAssertEqual(try XCTUnwrap(service.peakPhaseCurrentA), 20.0, accuracy: 0.05)
+            XCTAssertEqual(try XCTUnwrap(service.peakPhasePeakCurrentA), 20.0, accuracy: 0.05)
             service.stop()
             service.tick()
             XCTAssertNil(service.elapsedSeconds, "结束后清空，避免把上次耗时当作新测试数据")
