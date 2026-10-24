@@ -672,3 +672,5 @@
 - 服务其他新增：`elapsedSeconds`（tick 10 Hz、值不变不重发）、`peakBusCurrentA`/`peakPhaseCurrentA`（按幅值取最大保留符号——加速放电母线电流为负）。
 - 测试：AppTests 新增 6 个服务用例（条件快照、耗时/峰值语义、检查点恢复/清除/损坏、批量删除守卫）与 `AccelerationChartSeriesTests` 3 个纯函数用例（withServices 基建注入隔离检查点目录）；UITests 新增控制器入口往返与快捷目标联动 2 个用例。
 - 本地验证：仅源码静态审查与 git diff --check（Windows 无 Swift/Xcode），未编译、未跑 XCTest/XCUITest、未产 IPA；不能以既往 CI 结果覆盖本轮。待 macOS CI 与真机/车辆验收项见方案文档第 6 节。改动保留本地未提交。
+
+- 交付（北京时间 2026-10-25）：按用户授权提交并推送（`495b5fb` → `9597ab1` → `f6613bf`）。CI 三轮：首轮暴露 4 处编译错（`downsample` 参数重命名、Charts 改用普通 `Chart { ForEach + marks }` 构建器、`peakPhasePeakCurrentA` 拼写，测试文件同拼写一并修复）；第三轮编译与包校验通过并上传 IPA 后，按所有者要求取消模拟器测试阶段。产物：`build/ci/f6613bf/ANTuRide-unsigned.ipa`（2,521,105 字节，SHA-256 `8eba272520cd542e74f12467b7318078986165c27a3187760157a6565580160c`，`artifact-verification.json` 同目录；run `40123559965`）。本机 `verify_ipa.py` 的 MinimumOSVersion 断言随 project.yml 16.1 同步修正。测试与真机/车辆验收边界见 `docs/CI_BUILD_RESULTS.md` 第 12 节。

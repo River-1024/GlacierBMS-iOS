@@ -274,3 +274,11 @@ GitHub 构建通过仅代表工程可编译、可测试，不构成设备已验�
 
 - 全量 UI 用例在最后一次断言修正后**未再跑通**（`39906108735` 被 60 分钟 job 上限取消，`39912155852` 按用户要求取消）。已通过的部分：13 个 `ANTuRideUITests` 中 12 个、`HomeParameterEditingUITests` 中 13 个；剩余 1 例经定向运行单独通过。合并前需要一次完整回归。
 - 真机验收全部未做：实时活动创建/结束、锁屏 30 分钟续记、灵动岛展开态、非挖孔机型锁屏卡片、系统关闭实时活动后的降级、行程结束后卡片消失。模拟器与 CI 结果不能替代这些结论。
+
+## 12. 加速测试升级批次（北京时间 2026-10-25）
+
+- 提交：`495b5fb`（feat 批次）→ `9597ab1`（修 CI 编译错）→ `f6613bf`（修测试拼写），分支 `codex/ios-parity-20261010`。
+- 三次 workflow_dispatch：`40122599455`（4 分钟失败：`downsample` 参数重声明、`Chart(_:content:background:)` 形态不可用、`peakPhaseCurrentA` 拼写，共 4 处编译错）；`40123074356`（App 编译通过，测试 target 编译因同一拼写失败）；`40123559965`（编译与包校验通过，IPA 已上传后按所有者要求取消模拟器测试阶段）。
+- 本轮教训再次验证：Windows 本机无法替代 CI 编译——静态审查漏掉的参数名冲突、Charts API 形态与跨文件拼写只能靠真实编译暴露。
+- 交付 IPA：`build/ci/f6613bf/ANTuRide-unsigned.ipa`，2,521,105 字节，SHA-256 `8eba272520cd542e74f12467b7318078986165c27a3187760157a6565580160c`；`artifact-verification.json` 同目录。包校验通过：`com.zjsf.anturide` / 安途 / 0.1.0 (1) / MinimumOSVersion 16.1（project.yml 全 target 16.1，`verify_ipa.py` 的 16.0 断言已同步修正为 16.1）/ arm64 / 无签名与描述文件 / 含 ANTuRideDomain 框架 / 后台模式 location + bluetooth-central。
+- 边界：模拟器测试未完成（所有者取消），280 项 App 测试、3 项图表新测试、6 项服务新测试与 2 项 UI 新测试在本次运行中未得出结论；真机/车辆验收项见 `docs/ACCELERATION_PARITY_UPGRADE_PLAN.md` 第 6 节。不能以编译与包校验替代测试与实机结论。
