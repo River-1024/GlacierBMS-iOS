@@ -269,7 +269,7 @@ public final class AccelerationService: ObservableObject {
                 peakBusCurrentA = bus
             }
             if let phase = finite(telemetry.phasePeakCurrentA), abs(phase) >= abs(peakPhasePeakCurrentA ?? 0) {
-                peakPhaseCurrentA = phase
+                peakPhasePeakCurrentA = phase
             }
         }
         currentSpeedKmh = displayConfig.rpmSpeedMps(rawRpm: Double(telemetry.rpm)).map { $0 * 3.6 }

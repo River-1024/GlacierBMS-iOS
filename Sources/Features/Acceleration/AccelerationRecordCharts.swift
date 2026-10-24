@@ -89,22 +89,22 @@ enum AccelerationChartSeriesBuilder {
 
     /// 分桶保留每个桶的首、末与极值点，并按时间顺序输出。
     /// 桶数 = maxPointsPerRun / 4，每桶最多 4 个点，保证总数不超过 maxPointsPerRun。
-    private static func downsample(_ run: [(Double, Double)], run: Int, metric: String) -> [Point] {
-        guard run.count > maxPointsPerRun else {
-            return run.enumerated().map { Point(x: $0.element.0, y: $0.element.1, series: run, metric: metric) }
+    private static func downsample(_ samples: [(Double, Double)], run: Int, metric: String) -> [Point] {
+        guard samples.count > maxPointsPerRun else {
+            return samples.enumerated().map { Point(x: $0.element.0, y: $0.element.1, series: run, metric: metric) }
         }
         var kept: [Point] = []
         kept.reserveCapacity(maxPointsPerRun)
         let bucketCount = max(1, maxPointsPerRun / 4)
-        let count = run.count
+        let count = samples.count
         for bucket in 0..<bucketCount {
             let start = bucket * count / bucketCount
             let end = min(count, (bucket + 1) * count / bucketCount)
             guard start < end else { continue }
-            var candidates = [run[start], run[start], run[end - 1], run[end - 1]]
-            var minimum = run[start]
-            var maximum = run[start]
-            for value in run[start..<end] {
+            var candidates = [samples[start], samples[start], samples[end - 1], samples[end - 1]]
+            var minimum = samples[start]
+            var maximum = samples[start]
+            for value in samples[start..<end] {
                 if value.1 < minimum.1 { minimum = value }
                 if value.1 > maximum.1 { maximum = value }
             }
@@ -162,10 +162,11 @@ struct AccelerationRecordChartsSection: View {
     }
 
     private var speedChart: some View {
-        Chart(data.speed) { point in
-            LineMark(x: .value("时间", point.x), y: .value("速度", point.y),
-                     series: .value("连续区间", point.series))
-        } background: {
+        Chart {
+            ForEach(data.speed) { point in
+                LineMark(x: .value("时间", point.x), y: .value("速度", point.y),
+                         series: .value("连续区间", point.series))
+            }
             marks
         }
         .chartXScale(domain: xDomain)
@@ -187,7 +188,6 @@ struct AccelerationRecordChartsSection: View {
                 PointMark(x: .value("时间", point.x), y: .value("电流", point.y))
                     .foregroundStyle(.secondary)
             }
-        } background: {
             marks
         }
         .chartXScale(domain: xDomain)
